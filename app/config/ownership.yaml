@@ -1,0 +1,33 @@
+# OWNERSHIP — element-type -> extractor priority (AGENTS.md §1.11: ownership, never voting).
+#
+# This iteration only implements the digital-layer/Docling path (born-digital PDFs,
+# ARCHITECTURE.md §7 build order step 1). SCANNED/DIGITAL_DIRTY pages fall back to
+# Docling best-effort today (flagged review_required) rather than an OCR engine that
+# isn't wired in yet — add "surya" / "mineru" entries here, not at call sites, once
+# those extractors are integrated.
+version: "0.1"
+
+owners:
+  layout:
+    DIGITAL_CLEAN: [docling]
+    DIGITAL_DIRTY: [docling]
+    SCANNED: [docling]     # best-effort fallback until OCR (surya) is wired in
+    UNCERTAIN: [docling]
+
+  table:
+    DIGITAL_CLEAN: [docling]
+    DIGITAL_DIRTY: [docling]
+    SCANNED: [docling]
+    UNCERTAIN: [docling]
+
+  equation:
+    DIGITAL_CLEAN: [docling]   # mineru would take priority here once integrated
+    DIGITAL_DIRTY: [docling]
+    SCANNED: [docling]
+    UNCERTAIN: [docling]
+
+  text:
+    DIGITAL_CLEAN: [digital_layer]
+    DIGITAL_DIRTY: [docling]
+    SCANNED: [docling]         # surya would take priority here once integrated
+    UNCERTAIN: [docling]

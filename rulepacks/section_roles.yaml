@@ -1,0 +1,123 @@
+# rulepacks/section_roles.yaml
+#
+# Multilingual heading-text dictionary for section-role classification.
+#
+# THIS IS A SECONDARY, CONFIDENCE-BOOSTING SIGNAL ONLY. The primary, language-independent
+# signal is structural shape + document position (see section_role_classifier.py). This
+# file is intentionally incomplete — it cannot cover every language/edition variant a
+# standards body publishes. Gaps here degrade confidence toward "review, don't exclude";
+# they must never cause a false exclusion by themselves. Add languages/variants as
+# encountered in real documents; treat additions the same as any other pipeline change —
+# re-run the section-role gold set before shipping (see AGENTS.md merge gate).
+#
+# Matching is case-insensitive, NFC-normalized, diacritic-tolerant, and matches on the
+# node's OWN heading text only — never on body text (which would risk matching, e.g.,
+# the literal word "index" inside a normative clause).
+
+version: "1.0"
+
+roles:
+  # High safety: near-zero real-world cost to exclude, structural signal (dot-leader /
+  # repeated short lines) is already strong on its own — dictionary match here mostly
+  # just raises confidence and lets the classifier skip a borderline case faster.
+  toc:
+    en: ["table of contents", "contents"]
+    fr: ["table des matières", "sommaire"]
+    de: ["inhaltsverzeichnis"]
+    es: ["índice", "tabla de contenidos", "contenido"]
+    it: ["indice"]
+    pt: ["índice", "sumário"]
+    nl: ["inhoudsopgave"]
+    pl: ["spis treści"]
+    sv: ["innehållsförteckning"]
+    da: ["indholdsfortegnelse"]
+    cs: ["obsah"]
+    tr: ["içindekiler"]
+    zh: ["目录", "目次"]
+    ja: ["目次"]
+    ko: ["목차"]
+    ru: ["содержание", "оглавление"]
+    ar: ["فهرس المحتويات", "المحتويات"]
+
+  list_of_figures:
+    en: ["list of figures"]
+    fr: ["liste des figures"]
+    de: ["abbildungsverzeichnis"]
+    es: ["lista de figuras", "índice de figuras"]
+    it: ["elenco delle figure"]
+    pt: ["lista de figuras"]
+    nl: ["lijst van figuren"]
+    pl: ["spis rysunków"]
+    zh: ["图目录", "插图清单"]
+    ja: ["図一覧", "図目次"]
+    ko: ["그림 목차"]
+    ru: ["перечень рисунков"]
+
+  list_of_tables:
+    en: ["list of tables"]
+    fr: ["liste des tableaux"]
+    de: ["tabellenverzeichnis"]
+    es: ["lista de tablas", "índice de tablas"]
+    it: ["elenco delle tabelle"]
+    pt: ["lista de tabelas"]
+    nl: ["lijst van tabellen"]
+    pl: ["spis tabel"]
+    zh: ["表目录", "表格清单"]
+    ja: ["表一覧", "表目次"]
+    ko: ["표 목차"]
+    ru: ["перечень таблиц"]
+
+  # Medium-high safety: ISO/IEC-style Foreword is standardized committee boilerplate,
+  # essentially never contains a testable requirement. Still gated by position
+  # (must be in the front zone, before the numbered normative body) before exclusion.
+  foreword:
+    en: ["foreword"]
+    fr: ["avant-propos"]
+    de: ["vorwort"]
+    es: ["prólogo"]
+    it: ["premessa"]
+    pt: ["prefácio"]
+    nl: ["voorwoord"]
+    pl: ["przedmowa"]
+    sv: ["förord"]
+    cs: ["předmluva"]
+    tr: ["önsöz"]
+    zh: ["前言"]
+    ja: ["まえがき"]
+    ko: ["머리말"]
+    ru: ["предисловие"]
+    ar: ["تصدير", "مقدمة الناشر"]
+
+  # LOWER safety on purpose: "Introduction"/"Preface" sometimes carries substantive
+  # rationale later clauses depend on. See section_role_classifier.py — this role is
+  # held to a stricter confidence threshold and always surfaces a review flag even
+  # when excluded, rather than being silently dropped.
+  preface:
+    en: ["preface", "introduction"]
+    fr: ["préface", "introduction"]
+    de: ["präambel", "einleitung"]
+    es: ["prefacio", "introducción"]
+    it: ["prefazione", "introduzione"]
+    pt: ["prefácio", "introdução"]
+    nl: ["inleiding"]
+    zh: ["序言", "引言"]
+    ja: ["序論", "はしがき"]
+    ko: ["서론"]
+    ru: ["преамбула", "введение"]
+    ar: ["مقدمة"]
+
+  # High safety, back-zone only: alphabetical term index at the very end of the document.
+  index:
+    en: ["index"]
+    fr: ["index"]
+    de: ["stichwortverzeichnis", "register", "sachwortverzeichnis"]
+    es: ["índice alfabético"]
+    it: ["indice analitico"]
+    pt: ["índice remissivo"]
+    nl: ["trefwoordenregister"]
+    pl: ["skorowidz"]
+    zh: ["索引"]
+    ja: ["索引"]
+    ko: ["색인"]
+    ru: ["алфавитный указатель", "предметный указатель"]
+    ar: ["فهرس"]

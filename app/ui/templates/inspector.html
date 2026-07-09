@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>ingestion-engine — {{ key }}</title>
+<style>
+  body { font-family: -apple-system, sans-serif; margin: 0; display: flex; height: 100vh; }
+  #page-pane { flex: 1; overflow: auto; padding: 16px; background: #2b2b2b; }
+  #page-wrap { position: relative; display: inline-block; }
+  #page-wrap img { display: block; max-width: none; }
+  .box { position: absolute; border: 1.5px solid; box-sizing: border-box; }
+  .box.normative { border-color: #4caf50; }
+  .box.excluded { border-color: #ff9800; }
+  .box.review { border-color: #f44336; }
+  #side-pane { width: 420px; overflow: auto; border-left: 1px solid #ccc; padding: 8px; }
+  .nav a { margin-right: 6px; }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  td, th { border-bottom: 1px solid #eee; padding: 3px 4px; text-align: left; }
+  .conf-low { color: #b71c1c; font-weight: bold; }
+  .conf-mid { color: #e65100; }
+  .badge { font-size: 10px; padding: 1px 4px; border-radius: 3px; background: #eee; }
+  .back-link { display: block; margin-bottom: 8px; font-size: 12px; }
+</style>
+</head>
+<body>
+  <div id="page-pane">
+    <a class="back-link" href="/" style="color:#ccc;">&larr; all documents</a>
+    <div class="nav">
+      {% for n in page_numbers %}
+        <a href="?page={{ n }}"{% if n == page %} style="font-weight:bold"{% endif %}>{{ n }}</a>
+      {% endfor %}
+    </div>
+    <div id="page-wrap">
+      <img src="/editions/{{ key }}/pages/{{ page }}.png">
+      {% for o in overlays %}
+        <div class="box {% if o.review_required %}review{% elif o.section_role != 'normative' %}excluded{% else %}normative{% endif %}"
+             style="left:{{ o.left }}px; top:{{ o.top }}px; width:{{ o.width }}px; height:{{ o.height }}px;"
+             title="{{ o.type }} conf={{ '%.2f'|format(o.confidence) }} role={{ o.section_role }}">
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+  <div id="side-pane">
+    <h3>Confidence-sorted inspector</h3>
+    <p>Worst elements first — independent of page order.</p>
+    <table>
+      <tr><th>page</th><th>type</th><th>role</th><th>conf</th><th>text</th></tr>
+      {% for n in confidence_sorted %}
+        <tr>
+          <td><a href="?page={{ n.provenance.page }}">{{ n.provenance.page }}</a></td>
+          <td>{{ n.type }}</td>
+          <td>
+            {{ n.section_role }}
+            {% if not n.compliance_relevant %}<span class="badge">excluded</span>{% endif %}
+            {% if n.review_required %}<span class="badge">review</span>{% endif %}
+          </td>
+          <td class="{% if n.provenance.confidence < 0.6 %}conf-low{% elif n.provenance.confidence < 0.85 %}conf-mid{% endif %}">
+            {{ '%.2f'|format(n.provenance.confidence) }}
+          </td>
+          <td>{{ (n.text or '')[:60] }}</td>
+        </tr>
+      {% endfor %}
+    </table>
+  </div>
+</body>
+</html>
