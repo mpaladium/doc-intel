@@ -126,6 +126,34 @@ measurement design. Note: because artifacts are content-addressed by
 whenever extraction behavior changes, or cached editions from old code will be
 served — the checker will read stale output otherwise.
 
+**Corpus scorecard** — `--all` checks every PDF in the sample dir instead of
+a random sample, and adds per-component metrics: clause-heading recall,
+formula-page recall (pages with strong math glyphs that should have produced
+an `equation` node), caption attachment (is a caption a child of its
+table/figure), and table-region fidelity ("TEDS-lite" — source tokens inside
+a table's cell-bbox region must appear in that table's cells):
+
+```bash
+./scripts/accuracy_check.sh --all
+```
+
+**OCR validation** — score a synthetic scanned copy against the original PDF
+it was rasterized from (free ground truth, no hand-labeling):
+
+```bash
+uv run python -m tests.fixtures.make_scanned_pdf original.pdf scanned.pdf
+uv run python -m app.cli.accuracy_check --doc scanned.pdf --gold-source original.pdf
+```
+
+**Section-role gold set** — the Goal-1 merge gate (ARCHITECTURE.md §2.3):
+false-exclusion rate on hand-labeled real documents must be 0 (a normative
+clause silently marked non-compliance-relevant would drop real evidence).
+Labels live in `tests/goldsets/section_roles/*.yaml`:
+
+```bash
+./scripts/section_role_gold.sh
+```
+
 ## Batch evaluation (run in background)
 
 For evaluating a whole directory of documents at once — the common case when
@@ -193,18 +221,24 @@ ingestion-engine ready: device=AcceleratorDevice.AUTO num_threads=8 max_concurre
 
 ## Pipeline
 
-`quarantine -> triage -> route -> extract(Docling) -> lattice -> topology ->
-continuity -> canon.units -> canon.equation -> lang -> classify.section_role ->
-nest_by_clause -> xref -> assemble`.
+`quarantine -> triage -> route -> extract(Docling, OCR auto-routed) ->
+caption_attach -> lattice -> topology -> continuity -> canon.units ->
+canon.equation -> lang -> classify.section_role -> nest_by_clause -> xref ->
+assemble`.
 
 - `triage` measures each page's text-layer quality
   (`DIGITAL_CLEAN`/`DIGITAL_DIRTY`/`SCANNED`/`UNCERTAIN`, PyMuPDF stats) and
   `route` looks up the extractor priority table (`app/config/ownership.yaml`)
   — both feed confidence/review flags and are recorded in
-  `pipeline_provenance` (`page_classes`, `engine_by_page`).
+  `pipeline_provenance` (`page_classes`, `engine_by_page`). If any page is
+  `SCANNED`/`UNCERTAIN`, the whole document is re-extracted with Docling's
+  RapidOCR enabled (`INGESTION_OCR`, default on) — Docling only actually OCRs
+  the pages that need it.
 - `extract` walks Docling's real `body` tree, preserving **deep list/group
   nesting** and section hierarchy. Table/figure **captions** become
-  `"caption"`-typed nodes tied to their table/figure. **Formulas** (Docling
+  `"caption"`-typed nodes; `caption_attach` re-parents an unclaimed caption
+  under its adjacent table/figure by page/position proximity when Docling's
+  own `.captions` link didn't fire (the common case). **Formulas** (Docling
   formula enrichment, `INGESTION_FORMULAS`, default on) become `"equation"`
   nodes with LaTeX in `Node.latex`.
 - `continuity` stitches multi-page tables and assigns **multi-row, span-aware

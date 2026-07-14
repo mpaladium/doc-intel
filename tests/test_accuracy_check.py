@@ -78,6 +78,32 @@ def test_content_words_ignores_short_and_numeric():
     assert acc.content_words("a 12 of the requirement") == {"the", "requirement"}
 
 
+def test_clause_heading_candidate_accepts_real_headings():
+    assert acc.clause_heading_candidate(_line("Grenzwertklassen 5.3.4", 400, 412)) == "5.3.4"
+    assert acc.clause_heading_candidate(_line("4.2.3 Limits", 400, 412)) == "4.2.3"
+
+
+def test_clause_heading_candidate_rejects_toc_sentences_and_bare_ints():
+    # TOC-shaped (dot leader + page number)
+    assert acc.clause_heading_candidate(_line("5.3 Störemission ........ 27", 400, 412)) is None
+    # sentence mentioning a clause
+    assert acc.clause_heading_candidate(
+        _line("Die Anforderungen gelten wie in Abschnitt beschrieben, siehe auch die Tabelle 5.4.1.8", 400, 412)) is None
+    # bare top-level integer ("1 Scope" handled by role gold set, not this probe)
+    assert acc.clause_heading_candidate(_line("1 Scope", 400, 412)) is None
+
+
+def test_heading_matches_by_clause_id_or_text():
+    assert acc.heading_matches("5.3.4", "Grenzwertklassen 5.3.4", {"5.3.4"}, [])
+    assert acc.heading_matches("9.9.9", "Prüfaufbau 9.9.9", set(), ["Prüfaufbau 9.9.9 extra"])
+    assert not acc.heading_matches("9.9.9", "Prüfaufbau 9.9.9", set(), ["unrelated"])
+
+
+def test_has_strong_math():
+    assert acc.has_strong_math("a_eff = √(∑ a_i²)")
+    assert not acc.has_strong_math("limit ≤ 40 dBµV/m at 30-230 MHz")  # units/comparators alone
+
+
 def test_extracted_by_page_attributes_cells_to_their_own_page():
     # A stitched table node lives on page 7 but has cells from pages 7 and 8;
     # each cell's text must be attributed to its own page.
@@ -96,3 +122,46 @@ def test_extracted_by_page_attributes_cells_to_their_own_page():
     assert "Parameters" in " ".join(by_page.get(7, []))
     assert "Electrical slow transient" in " ".join(by_page.get(8, []))
     assert "Electrical slow transient" not in " ".join(by_page.get(7, []))
+
+
+def test_check_document_gold_source_scores_against_original_not_scanned_copy(tmp_path):
+    # A text-layer-free "scanned" copy has no lines of its own to score
+    # against; --gold-source must pull source lines from the ORIGINAL PDF
+    # instead (see tests/fixtures/make_scanned_pdf.py). No Docling/OCR run
+    # needed here -- the edition is hand-built and pre-seeded into the store,
+    # isolating just the accuracy_check plumbing.
+    import fitz
+    from canonical_schema import CanonicalEdition, Node, Provenance
+    from app.cli.accuracy_check import check_document
+    from app.store.artifact_store import ArtifactStore, compute_key
+    from app.version import PIPELINE_VERSION
+
+    original = fitz.open()
+    page = original.new_page()
+    page.insert_text((72, 700), "The device shall comply with the limit.")
+    original_bytes = original.tobytes()
+    original.close()
+
+    scanned = fitz.open()
+    scanned.new_page()  # blank page, no text layer -- stands in for a raster-wrapped copy
+    scanned_bytes = scanned.tobytes()
+    scanned.close()
+
+    prov = Provenance(page=1, bbox=(72, 700, 400, 712), parser="ocr",
+                      model_version="v1", confidence=0.6)
+    root = Node(id="r", type="section", provenance=prov, children=[
+        Node(id="t", type="paragraph", text="The device shall comply with the limit.", provenance=prov),
+    ])
+    edition = CanonicalEdition(edition_id="e", source_sha256="s", schema_version="1.0", root=root)
+
+    store = ArtifactStore(tmp_path)
+    store.put_edition(compute_key(scanned_bytes, PIPELINE_VERSION), edition)
+
+    scanned_path = tmp_path / "scanned.pdf"
+    original_path = tmp_path / "original.pdf"
+    scanned_path.write_bytes(scanned_bytes)
+    original_path.write_bytes(original_bytes)
+
+    result = check_document(scanned_path, store, gold_source=original_path)
+    assert result.pages == 1
+    assert result.mean_coverage == 1.0  # extraction matches the ORIGINAL's real text exactly

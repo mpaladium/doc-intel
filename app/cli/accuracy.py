@@ -56,6 +56,8 @@ class SourceLine:
     y1: float
     x0: float
     horizontal: bool  # False => rotated (watermark/side text)
+    max_size: float = 0.0  # largest span font size on the line (heading signal)
+    x1: float = 0.0
 
 
 def is_furniture(line: SourceLine, page_height: float,
@@ -143,9 +145,83 @@ class DocAccuracy:
     numeric_fidelity: float = 1.0
     mean_reading_order_tau: float = 1.0
     total_genuine_misses: int = 0
+    # -- per-component scorecard (98%-target program) --
+    heading_candidates: int = 0        # source lines that look like headings (font size)
+    heading_matched: int = 0           # ... matched by an extracted section/heading
+    heading_recall: float = 1.0
+    formula_pages: int = 0             # pages with strong math-symbol content
+    formula_pages_with_equation: int = 0
+    formula_recall: float = 1.0
+    captions_total: int = 0
+    captions_attached: int = 0         # caption is a child of its table/figure
+    caption_attachment: float = 1.0
+    table_region_tokens: int = 0       # source tokens inside extracted table regions
+    table_region_found: int = 0        # ... present in that table's cell texts
+    table_region_fidelity: float = 1.0  # "TEDS-lite": region containment, not tree-edit
+    misses_flagged_for_review: int = 0  # genuine-miss lines on pages already review_required
     worst_pages: list[dict] = field(default_factory=list)
     per_page: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         from dataclasses import asdict
         return asdict(self)
+
+
+# --------------------------------------------------------------------------- #
+# Component-metric helpers (pure -- unit-testable without a PDF)
+# --------------------------------------------------------------------------- #
+HEADING_MAX_CHARS = 120      # headings are short
+HEADING_MAX_WORDS = 8        # a clause heading is a title, not a sentence
+
+# Font size/boldness proved useless on real standards (German TL: headings and
+# figure-diagram labels are the same 11pt non-bold ArialUnicodeMS), so heading
+# candidates are defined by the CLAUSE-NUMBER pattern instead -- the same
+# language-independent signal topology.assign_clause_ids uses. A candidate is a
+# short, title-like line carrying a dotted clause number; TOC-shaped lines
+# (dot-leader + page number) are excluded because a page-range chunk's TOC
+# legitimately lists clauses that live in other chunks.
+_TOC_SHAPE = re.compile(r"[.\s]{2,}\d{1,4}\s*$")
+
+# Strong math markers only: these are vanishingly rare in prose/tables of these
+# standards (unlike ±, ≤, µ which appear in ordinary limit cells), so a page
+# containing one should have produced an equation node. A conservative RECALL
+# floor probe, not a formula detector.
+_STRONG_MATH = set("√∑∏∫∂")
+
+
+def clause_heading_candidate(line: SourceLine) -> str | None:
+    """Returns the clause_id if this source line looks like a clause heading:
+    short, title-like, carrying a leading/trailing dotted clause number, and
+    not TOC-shaped. Reuses topology's clause parser so the candidate
+    definition can't drift from what extraction itself recognizes."""
+    from app.pipeline.topology import _extract_clause_id
+
+    text = line.text.strip()
+    if not text or len(text) > HEADING_MAX_CHARS:
+        return None
+    if _TOC_SHAPE.search(text):
+        return None  # TOC entry, not a heading
+    if len(text.split()) > HEADING_MAX_WORDS:
+        return None  # sentence mentioning a clause, not a heading
+    cid = _extract_clause_id(text)
+    if cid is None or "." not in cid.replace("Annex", ""):
+        return None  # require a dotted (multi-level) number: "5.3.4", not "5"
+    return cid
+
+
+def heading_matches(candidate_clause_id: str, candidate_text: str,
+                    extracted_clause_ids: set[str], extracted_headings: list[str]) -> bool:
+    """Matched if extraction produced a section with this clause_id anywhere in
+    the doc, or a heading whose text contains/is contained by the line."""
+    if candidate_clause_id in extracted_clause_ids:
+        return True
+    cand = norm(candidate_text)
+    for h in extracted_headings:
+        eh = norm(h)
+        if eh and (cand in eh or eh in cand):
+            return True
+    return False
+
+
+def has_strong_math(text: str) -> bool:
+    return any(ch in _STRONG_MATH for ch in text)

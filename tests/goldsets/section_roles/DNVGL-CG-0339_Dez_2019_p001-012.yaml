@@ -1,0 +1,20 @@
+doc: DNVGL-CG-0339_Dez_2019_p001-012.pdf
+sections:
+  - match: "class guideline"
+    compliance_relevant: false
+    role: title_page
+  - match: "foreword"
+    compliance_relevant: false
+    role: foreword
+  - match: "1 objective"
+    compliance_relevant: true
+    role: normative
+  - match: "2 scope"
+    compliance_relevant: true
+    role: normative
+  - match: "3 application"
+    compliance_relevant: true
+    role: normative
+  - match: "4 reference to other rules"
+    compliance_relevant: true
+    role: normative

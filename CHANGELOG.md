@@ -6,6 +6,75 @@ tag releases yet, so entries are grouped by work session instead of version.
 
 ## Unreleased
 
+### Added — 98%-accuracy program: component scorecard, section-role gold set, OCR path
+- **Component scorecard** (`app/cli/accuracy.py`/`accuracy_check.py --all`):
+  corpus-wide per-component metrics on top of the per-page factual-accuracy
+  checker — clause-heading recall (source lines matching the same
+  clause-number pattern `topology.assign_clause_ids` itself uses, so the
+  candidate definition can't drift from what extraction recognizes), a
+  formula-page recall probe (pages with strong math glyphs `√∑∏∫∂` that
+  should have produced an `equation` node), caption attachment (is a caption
+  actually a child of its table/figure), and a "TEDS-lite" table-region
+  fidelity check (source tokens inside a table's own cell-bbox region must
+  appear in that table's cells). Full 34-doc / 339-page real corpus baseline:
+  paragraph coverage 96.4%, table region fidelity 99.1%, heading recall
+  83.3%, **caption attachment 68.9%** (the clear outlier).
+- **Section-role gold set + false-exclusion gate** (build-order step 3,
+  ARCHITECTURE.md §2.3): `tests/goldsets/section_roles/*.yaml`, 5 hand-labeled
+  real docs (EN + DE) against source text, `app/cli/section_role_gold.py`
+  runner computing the false-exclusion rate (the hard gate: a normative
+  clause silently marked `compliance_relevant=false` drops real compliance
+  evidence). `scripts/section_role_gold.sh` + `tests/test_section_role_gold.py`
+  merge-gate test. **Gate: 0/28 false exclusions.**
+  - Building the gold set found a real bug: `looks_like_title_page`
+    (`section_role_classifier.py`) checked only page number + short text, with
+    no requirement that the section be the document's *first* one. On a
+    document chunk where an early glossary/definition entry ("Bündelfunk",
+    "Dauerzustand") happened to land on the chunk's page 1, it was
+    misclassified `title_page` and wrongly excluded -- a genuine false
+    exclusion. Fixed by requiring `is_first_section` (position is already the
+    primary, language-independent signal elsewhere in this classifier; this
+    is the same principle applied more strictly).
+- **OCR path** (build-order step 2, ARCHITECTURE.md §7): `assemble()` now
+  auto-routes to Docling's RapidOCR when triage finds a `SCANNED`/`UNCERTAIN`
+  page (`INGESTION_OCR`, default on; explicit `ocr_enabled=True` always wins).
+  `app/config/ownership.yaml`'s `text` row for those page classes now names
+  `rapidocr` (previously a `docling` best-effort placeholder).
+  `tests/fixtures/make_scanned_pdf.py` rasterizes a born-digital PDF into a
+  text-layer-free copy for **free OCR ground truth** -- the original's text
+  layer is exactly what OCR should recover. `accuracy_check.py --doc
+  <scanned> --gold-source <original>` scores against it: **86.8% measured
+  coverage** on the synthetic fixture. OCR'd nodes get downgraded confidence
+  and `review_required` like any `SCANNED` page (never silently trusted as
+  much as a real digital text layer).
+- **Proximity-based caption attachment** (`app/pipeline/caption_attach.py`):
+  the scorecard's clear #1 gap. An unclaimed caption (Docling didn't link it
+  via `.captions` -- the common case) adjacent to exactly one table/figure
+  sibling on the same page becomes that table/figure's child instead of a
+  loose sibling; ambiguous cases (caption between two tables, or no adjacent
+  table/figure) stay untouched -- fail-safe, never guesses. Corpus-wide:
+  **68.9% -> 85.2%** (164/238 -> 201/236 captions correctly attached).
+- `PIPELINE_VERSION` bumped twice this session (`0.5.0` for OCR routing,
+  `0.5.1` for caption attachment) -- each is an extraction-behavior change,
+  so the content-address key must change too (see the earlier stale-cache
+  entry below for why this matters).
+
+### Corpus scorecard: before -> after this session (34 docs, 339 pages)
+
+| Component | Before | After | Notes |
+|---|---|---|---|
+| Paragraph/text coverage | 96.4% | 96.4% | unchanged (not targeted this pass) |
+| Clause-heading recall | 83.3% | 83.3% | unchanged; residual gap is single-digit trailing clause numbers ("Anwendungsbereich 1") deliberately not parsed as clause_ids to avoid false positives on figure/quantity labels ("Prüffeldstärke 2") -- a documented, not a silent, limitation |
+| **Caption attachment** | **68.9%** | **85.2%** | fixed this session (`caption_attach.py`) |
+| Table region fidelity | 99.1% | 99.1% | unchanged, already near target |
+| Section-role false-exclusion | unmeasured | **0/28 (gate PASS)** | new gold set this session |
+| Genuine content misses | 73 | 73 | unchanged; mostly un-rejoined hyphenation fragments across node boundaries ("ten.", "ben."), a distinct gap from the existing single-node de-hyphenation -- noted, not fixed this pass |
+
+Not every component reached 98% this session -- heading recall's remaining
+gap is a known, deliberate trade-off (documented above) rather than an
+oversight, and the hyphen-fragment miss class is a real, scoped follow-up.
+Stated honestly rather than claiming a blanket 98% across the board.
+
 ### Added — accurate compliance clause tree (topology, units, cross-refs)
 - **Clause-number-driven hierarchy** (`topology.nest_by_clause`, wired into
   `assemble`). The tree was **flat** — every section a sibling — because

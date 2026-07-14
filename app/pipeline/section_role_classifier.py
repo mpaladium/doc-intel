@@ -151,7 +151,16 @@ def looks_like_index(node: Node) -> float:
     return min(shape_ratio, sortedness)
 
 
-def looks_like_title_page(node: Node, page_no: int) -> float:
+def looks_like_title_page(node: Node, page_no: int, is_first_section: bool) -> float:
+    """A cover/title page is virtually always the document's FIRST section --
+    `is_first_section` is a strong, cheap position signal that a short-text,
+    page-1 section deep in the front zone (e.g. an early glossary/definition
+    entry that happens to sit on physical page 1) is not. Without this guard,
+    any later front-zone section meeting the page/length check alone gets
+    misclassified as title_page -- a real false-exclusion found via the
+    section-role gold set (see CHANGELOG)."""
+    if not is_first_section:
+        return 0.0
     lines = _leaf_lines(node)
     total_chars = sum(len(ln) for ln in lines)
     return 1.0 if (page_no <= 1 and total_chars < 400) else 0.0
@@ -211,6 +220,7 @@ class ClassificationContext:
 
 def classify_section(
     node: Node, zone: str, ctx: ClassificationContext, page_no: int = 1,
+    is_first_section: bool = False,
 ) -> Node:
     """Returns a NEW Node (Pydantic models are copy-on-write here) with section_role /
     compliance_relevant / role_confidence / review_* populated. Body-zone sections are
@@ -227,7 +237,7 @@ def classify_section(
                             looks_like_caption_list(node, ctx.known_caption_numbers)))
         candidates.append(("list_of_tables",
                             looks_like_caption_list(node, ctx.known_caption_numbers)))
-        candidates.append(("title_page", looks_like_title_page(node, page_no)))
+        candidates.append(("title_page", looks_like_title_page(node, page_no, is_first_section)))
         candidates.append(("foreword", 0.0))   # shape signal weak; dictionary carries it
         candidates.append(("preface", 0.0))
     else:  # back zone
@@ -290,7 +300,7 @@ def classify_document(top_level_sections: list[Node], rulepack: RolePack) -> lis
     for i, sec in enumerate(top_level_sections):
         zone = "front" if i < body_start else ("back" if i >= back_start else "body")
         page_no = sec.provenance.page
-        out.append(classify_section(sec, zone, ctx, page_no=page_no))
+        out.append(classify_section(sec, zone, ctx, page_no=page_no, is_first_section=(i == 0)))
     return out
 
 

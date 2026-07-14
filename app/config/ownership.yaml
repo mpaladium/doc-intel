@@ -1,17 +1,21 @@
 # OWNERSHIP — element-type -> extractor priority (AGENTS.md §1.11: ownership, never voting).
 #
-# This iteration only implements the digital-layer/Docling path (born-digital PDFs,
-# ARCHITECTURE.md §7 build order step 1). SCANNED/DIGITAL_DIRTY pages fall back to
-# Docling best-effort today (flagged review_required) rather than an OCR engine that
-# isn't wired in yet — add "surya" / "mineru" entries here, not at call sites, once
-# those extractors are integrated.
-version: "0.1"
+# build order step 2 (ARCHITECTURE.md §7): SCANNED/UNCERTAIN pages route their
+# `text` ownership to Docling's built-in RapidOCR (offline, already bundled --
+# see app/pipeline/assemble.py's triage-driven ocr_enabled routing), gated by
+# INGESTION_OCR (default on). Surya/MinerU remain the documented, heavier
+# TECHSTACK.md swap-in for this row if RapidOCR's accuracy proves insufficient
+# on a real scanned corpus -- a config change here, never a call-site special
+# case. `layout`/`table`/`equation` stay Docling-owned regardless of OCR:
+# Docling remains the sole geometry owner (AGENTS.md §1.10) even when the text
+# inside a region comes from OCR instead of the digital text layer.
+version: "0.2"
 
 owners:
   layout:
     DIGITAL_CLEAN: [docling]
     DIGITAL_DIRTY: [docling]
-    SCANNED: [docling]     # best-effort fallback until OCR (surya) is wired in
+    SCANNED: [docling]
     UNCERTAIN: [docling]
 
   table:
@@ -29,5 +33,5 @@ owners:
   text:
     DIGITAL_CLEAN: [digital_layer]
     DIGITAL_DIRTY: [docling]
-    SCANNED: [docling]         # surya would take priority here once integrated
-    UNCERTAIN: [docling]
+    SCANNED: [rapidocr]
+    UNCERTAIN: [rapidocr]

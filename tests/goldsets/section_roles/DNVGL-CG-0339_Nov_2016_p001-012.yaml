@@ -1,0 +1,20 @@
+doc: DNVGL-CG-0339_Nov_2016_p001-012.pdf
+sections:
+  - match: "class guideline"
+    compliance_relevant: false
+    role: title_page
+  - match: "foreword"
+    compliance_relevant: false
+    role: foreword
+  - match: "1 scope"
+    compliance_relevant: true
+    role: normative
+  - match: "2 reference to other rules"
+    compliance_relevant: true
+    role: normative
+  - match: "3 definitions"
+    compliance_relevant: true
+    role: normative
+  - match: "4 procedures for type approval"
+    compliance_relevant: true
+    role: normative

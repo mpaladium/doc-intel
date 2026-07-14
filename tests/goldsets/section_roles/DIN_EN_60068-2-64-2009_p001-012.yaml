@@ -1,0 +1,28 @@
+# Hand-labeled against the source PDF (German DIN national standard, embeds
+# the underlying EN standard as a reprint/annex -- a genuinely tricky
+# multi-title-page document, good stress test for false-exclusion).
+doc: DIN_EN_60068-2-64-2009_p001-012.pdf
+sections:
+  # This substring also matches a few repeated running-header sections later
+  # in the doc (the header text leaked through as its own section node) --
+  # those aren't the title page, so `role` is deliberately not asserted here
+  # (would be noisy role_mismatch, not a real defect); compliance_relevant is
+  # still checked for all of them since ideally none would be normative body.
+  - match: "din en 60068-2-64 (vde 0468-2-64)"
+    compliance_relevant: false
+  # "Vorwort" (foreword) and "Nationales Vorwort" (national foreword) both
+  # match this substring -- both are front matter, both expected excluded.
+  - match: "vorwort"
+    compliance_relevant: false
+  - match: "einleitung"           # "Introduction"
+    compliance_relevant: false
+    role: preface
+  - match: "1 anwendungsbereich"   # "1 Scope" -- the gate: must stay normative
+    compliance_relevant: true
+    role: normative
+  - match: "2 normative verweisungen"  # "2 Normative references"
+    compliance_relevant: true
+    role: normative
+  - match: "3 begriffe"           # "3 Terms and definitions"
+    compliance_relevant: true
+    role: normative

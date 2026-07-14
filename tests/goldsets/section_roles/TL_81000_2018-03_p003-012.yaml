@@ -1,0 +1,27 @@
+# A body-only chunk (mid-document excerpt, no cover/foreword in this page
+# range) -- the no-false-positive control: every section here is normative
+# body content (scope, glossary/definition entries, general clauses) and must
+# stay compliance_relevant=true. This is also the doc that surfaced the
+# looks_like_title_page false-exclusion (short glossary entries "Bündelfunk"/
+# "Dauerzustand" on this chunk's page 1 were wrongly classified as
+# title_page before the is_first_section fix -- see CHANGELOG).
+doc: TL_81000_2018-03_p003-012.pdf
+sections:
+  - match: "anwendungsbereich"
+    compliance_relevant: true
+    role: normative
+  - match: "begriffe 2"
+    compliance_relevant: true
+    role: normative
+  - match: "bündelfunk"
+    compliance_relevant: true
+    role: normative
+  - match: "dauerzustand"
+    compliance_relevant: true
+    role: normative
+  - match: "einzelimpuls"
+    compliance_relevant: true
+    role: normative
+  - match: "symbole und abkürzungen"
+    compliance_relevant: true
+    role: normative

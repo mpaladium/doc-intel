@@ -1,0 +1,16 @@
+# Body-only chunk, same shape as the 2018-03 edition's gold file -- also
+# doubles as the multilingual (German) no-false-positive control.
+doc: TL_81000_2021-09_GER_p003-012.pdf
+sections:
+  - match: "anwendungsbereich"
+    compliance_relevant: true
+    role: normative
+  - match: "begriffe 2"
+    compliance_relevant: true
+    role: normative
+  - match: "abkürzungen 3"
+    compliance_relevant: true
+    role: normative
+  - match: "allgemein 4"
+    compliance_relevant: true
+    role: normative
