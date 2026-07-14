@@ -1,25 +1,44 @@
 """Generates a synthetic born-digital PDF shaped like an IEC/CISPR-style
 standard: title page, a real (>=8 line) table of contents, a foreword, an
 "Introduction" preface, numbered normative clauses (including a nested
-sub-clause and a bordered table), and a trailing alphabetical index. Enough
-to exercise triage, section-role front/back-zone exclusion, clause_id
-assignment, and table extraction in one document -- no real standards PDFs
-are available in this repo yet (see plan's deferred-work note).
+sub-clause, a captioned table, and a captioned figure), and a trailing
+alphabetical index. Enough to exercise triage, section-role front/back-zone
+exclusion, clause_id assignment, table extraction, and caption handling in
+one document -- no real standards PDFs are available in this repo yet (see
+plan's deferred-work note).
 """
 
 from __future__ import annotations
 
+import tempfile
 from pathlib import Path
 
+import fitz  # PyMuPDF
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, Image
 
 styles = getSampleStyleSheet()
 h1 = ParagraphStyle("H1", parent=styles["Heading1"], fontSize=16, spaceAfter=10)
 h2 = ParagraphStyle("H2", parent=styles["Heading2"], fontSize=13, spaceAfter=8)
 body = ParagraphStyle("Body", parent=styles["Normal"], fontSize=10, spaceAfter=6)
+caption = ParagraphStyle("Caption", parent=styles["Normal"], fontName="Helvetica-Oblique",
+                          fontSize=8, spaceAfter=6)
+
+
+def _tiny_image_path() -> str:
+    """A small PNG written to a temp file (reportlab's Image flowable wants a
+    path/file-like it can re-open, not a bare ImageReader in this version) to
+    stand in for a real figure -- just enough for Docling's layout model to
+    have something picture-shaped to detect. Not written into the repo since
+    it's regenerated on every fixture build."""
+    pix = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 160, 100))
+    pix.set_rect(pix.irect, (180, 60, 60))
+    fd, path = tempfile.mkstemp(suffix=".png")
+    with open(fd, "wb") as f:
+        f.write(pix.tobytes("png"))
+    return path
 
 
 def build(path: str | Path) -> None:
@@ -76,6 +95,9 @@ def build(path: str | Path) -> None:
     story.append(Paragraph("4.1 General", h2))
     story.append(Paragraph("Tests shall be performed as specified in this clause.", body))
     story.append(Paragraph("4.2 Radiated emissions", h2))
+    story.append(Paragraph("The test setup is shown below.", body))
+    story.append(Image(_tiny_image_path(), width=160, height=100))
+    story.append(Paragraph("Figure 1 -- Test setup diagram", caption))
     story.append(Paragraph("4.2.3 Limits", h2))
     story.append(Paragraph("Table 1 gives the radiated emission limits.", body))
 
@@ -92,6 +114,7 @@ def build(path: str | Path) -> None:
         ("FONTSIZE", (0, 0), (-1, -1), 9),
     ]))
     story.append(tbl)
+    story.append(Paragraph("Table 1 -- Radiated emission limits by frequency", caption))
     story.append(PageBreak())
 
     story.append(Paragraph("5 Compliance criteria", h1))

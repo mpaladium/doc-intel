@@ -6,5 +6,5 @@ so bumping it is what forces re-processing instead of silently serving stale
 output from an old pipeline version.
 """
 
-PIPELINE_VERSION = "0.1.0-digital-only"
+PIPELINE_VERSION = "0.4.0-digital-only"
 SCHEMA_VERSION = "1.0"

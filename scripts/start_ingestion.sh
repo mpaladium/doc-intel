@@ -14,6 +14,7 @@
 #   DOCS_DIR=/path/to/pdfs ./scripts/start_ingestion.sh
 #   HOST=0.0.0.0 PORT=8080 ./scripts/start_ingestion.sh /path/to/pdfs
 #   INGESTION_DEVICE=cpu ./scripts/start_ingestion.sh /path/to/pdfs   # force CPU on a shared GPU box
+#   INGESTION_RELOAD=1 ./scripts/start_ingestion.sh /path/to/pdfs     # dev: auto-restart on source changes
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
@@ -27,6 +28,7 @@ fi
 : "${DOCS_DIR:=./data/docs}"
 : "${INGESTION_DEVICE:=auto}"
 : "${INGESTION_MAX_CONCURRENT_PARSES:=1}"
+: "${INGESTION_RELOAD:=0}"
 
 export ARTIFACT_STORE_PATH DOCS_DIR INGESTION_DEVICE INGESTION_MAX_CONCURRENT_PARSES
 
@@ -47,4 +49,25 @@ echo "[start_ingestion] docs dir:      ${DOCS_DIR}"
 echo "[start_ingestion] artifact store: ${ARTIFACT_STORE_PATH}"
 echo "[start_ingestion] serving API + UI on http://${HOST}:${PORT}  (document picker: /)"
 
-exec uv run uvicorn app.api:app --host "${HOST}" --port "${PORT}"
+# Build the full command as an array and append to it, rather than
+# expanding a possibly-empty array on its own -- bash 3.2 (macOS's default
+# /bin/bash) mishandles "${EMPTY_ARRAY[@]}" under `set -u`.
+CMD=(uv run uvicorn app.api:app --host "${HOST}" --port "${PORT}")
+
+if [[ "${INGESTION_RELOAD}" == "1" ]]; then
+  # --reload-dir only accepts directories (a bare `canonical_schema.py`
+  # entry is silently dropped by uvicorn/watchfiles), so this watches the
+  # project root instead and excludes everything that isn't source: the
+  # artifact store and DOCS_DIR both default under ./data and both mutate on
+  # every parse, which would otherwise thrash the reloader; .venv/.git/caches
+  # are just noise. Excludes are defensive if a custom DOCS_DIR/
+  # ARTIFACT_STORE_PATH points elsewhere under the tree too.
+  CMD+=(--reload --reload-dir .
+    --reload-exclude 'data/*' --reload-exclude '.venv/*' --reload-exclude '.git/*'
+    --reload-exclude '__pycache__/*' --reload-exclude '.pytest_cache/*'
+    --reload-exclude 'tests/fixtures/*.pdf')
+  echo "[start_ingestion] hot reload: ON (watching source files, excluding data/.venv/caches)"
+  echo "[start_ingestion] note: each reload re-runs Docling model warm-up (a few seconds)"
+fi
+
+exec "${CMD[@]}"

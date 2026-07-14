@@ -4,15 +4,62 @@ types that lack a `.text` field -- TableItem and PictureItem both do, which
 previously crashed extraction with an AttributeError on any real-world PDF
 containing a table or an image (the synthetic e2e fixture only exercised
 tables, so the picture case shipped unnoticed until a real document hit it).
+
+Also covers caption handling: captions should never become spurious
+top-level sections or generic paragraphs disconnected from the table/figure
+they describe (see CHANGELOG). Docling's own TableItem/PictureItem.captions
+back-reference is used when Docling populates it, but empirically that link
+isn't always populated even for an adjacent caption -- so an "unclaimed"
+caption must still become a correctly-typed node, never silently dropped.
 """
 
 from types import SimpleNamespace
 
-from app.pipeline.extract_docling import _content_builder
+from docling_core.types.doc import DocItemLabel
+
+from app.pipeline.extract_docling import _build_tree, _claimed_caption_ids, _content_builder
 
 
 def _fake_prov(page=1, bbox=(0.0, 0.0, 10.0, 10.0)):
     return SimpleNamespace(page_no=page, bbox=SimpleNamespace(l=bbox[0], t=bbox[1], r=bbox[2], b=bbox[3]))
+
+
+def _fake_ref(resolved_item):
+    return SimpleNamespace(resolve=lambda doc: resolved_item)
+
+
+def _item(label, text=None, level=None, children=(), captions=(), **extra):
+    """A fake Docling content item. `children`/`captions` are the raw child
+    items; they're wrapped as resolvable refs (matching Docling's model)."""
+    ns = SimpleNamespace(label=label, prov=[_fake_prov()],
+                         children=[_fake_ref(c) for c in children], **extra)
+    if text is not None:
+        ns.text = text
+    if level is not None:
+        ns.level = level
+    if captions:
+        ns.captions = [_fake_ref(c) for c in captions]
+    return ns
+
+
+def _group(children=(), label="group"):
+    """A fake Docling GroupItem/ListGroup: its `.label` is NOT a DocItemLabel,
+    which is how _build_tree tells a structural container from content."""
+    return SimpleNamespace(label=label, children=[_fake_ref(c) for c in children])
+
+
+def _fake_doc(top_items):
+    """A fake DoclingDocument: a `body` group whose children are the given
+    top-level items (each a resolvable ref)."""
+    return SimpleNamespace(body=_group(children=top_items))
+
+
+def _section_header(text, level=1):
+    return _item(DocItemLabel.SECTION_HEADER, text=text, level=level)
+
+
+def _text_item(text, label=DocItemLabel.TEXT):
+    return _item(label, text=text)
 
 
 def test_table_item_without_text_attribute_does_not_raise():
@@ -25,6 +72,31 @@ def test_table_item_without_text_attribute_does_not_raise():
     assert node is not None
     assert node.type == "table"
     assert node.text is None
+
+
+def _fake_table_cell(row, col, text, bbox=(1.0, 2.0, 3.0, 4.0)):
+    return SimpleNamespace(
+        start_row_offset_idx=row, end_row_offset_idx=row + 1,
+        start_col_offset_idx=col, end_col_offset_idx=col + 1,
+        column_header=(row == 0), text=text,
+        bbox=SimpleNamespace(l=bbox[0], t=bbox[1], r=bbox[2], b=bbox[3]),
+    )
+
+
+def test_table_cells_carry_source_page_and_bbox():
+    # Cells must record their own page (the table's page) so a stitched
+    # continuation table can attribute each cell to where it came from.
+    table_item = SimpleNamespace(
+        prov=[_fake_prov(page=7)],
+        data=SimpleNamespace(table_cells=[
+            _fake_table_cell(0, 0, "Parameters"),
+            _fake_table_cell(1, 0, "Electrical slow transient"),
+        ]),
+    )
+    node = _content_builder(table_item, "table").to_node()
+    assert node.cells is not None and len(node.cells) == 2
+    assert all(c.page == 7 for c in node.cells)
+    assert node.cells[0].bbox == (1.0, 2.0, 3.0, 4.0)
 
 
 def test_picture_item_without_text_attribute_does_not_raise():
@@ -54,3 +126,163 @@ def test_item_without_provenance_yields_no_node():
 
     builder = _content_builder(fake_item, "paragraph")
     assert builder.to_node() is None
+
+
+def test_formula_item_text_becomes_node_latex():
+    # After formula enrichment, FormulaItem.text is the LaTeX string.
+    fake_formula = SimpleNamespace(prov=[_fake_prov()], text="E = mc^2")
+
+    node = _content_builder(fake_formula, "equation").to_node()
+
+    assert node.type == "equation"
+    assert node.latex == "E = mc^2"
+    assert node.text == "E = mc^2"
+
+
+def test_formula_item_without_text_yields_no_latex():
+    fake_formula = SimpleNamespace(prov=[_fake_prov()])  # enrichment off/failed
+
+    node = _content_builder(fake_formula, "equation").to_node()
+
+    assert node.type == "equation"
+    assert node.latex is None
+
+
+# --------------------------------------------------------------------------- #
+# Caption resolution via TableItem/PictureItem.captions
+# --------------------------------------------------------------------------- #
+def test_content_builder_resolves_captions_via_dldoc():
+    cap_item = SimpleNamespace(text="Table 1 -- caption text", prov=[_fake_prov()])
+    table_item = SimpleNamespace(prov=[_fake_prov()], data=None, captions=[_fake_ref(cap_item)])
+
+    builder = _content_builder(table_item, "table", dldoc=object())
+    node = builder.to_node()
+
+    assert node.type == "table"
+    assert len(node.children) == 1
+    assert node.children[0].type == "caption"
+    assert node.children[0].text == "Table 1 -- caption text"
+
+
+def test_content_builder_without_dldoc_skips_caption_resolution():
+    cap_item = SimpleNamespace(text="Table 1 -- caption text", prov=[_fake_prov()])
+    table_item = SimpleNamespace(prov=[_fake_prov()], data=None, captions=[_fake_ref(cap_item)])
+
+    builder = _content_builder(table_item, "table")  # dldoc defaults to None
+    node = builder.to_node()
+
+    assert node.children == []
+
+
+def test_claimed_caption_ids_records_resolved_caption_identity():
+    cap_item = _item(DocItemLabel.CAPTION, text="cap")
+    table_item = _item(DocItemLabel.TABLE, captions=[cap_item])
+    claimed = _claimed_caption_ids(_fake_doc([table_item]))
+    assert id(cap_item) in claimed
+
+
+def test_claimed_caption_ids_skips_unresolvable_refs():
+    def _raise(doc):
+        raise RuntimeError("broken ref")
+    table_item = SimpleNamespace(label=DocItemLabel.TABLE, children=[],
+                                 captions=[SimpleNamespace(resolve=_raise)])
+    assert _claimed_caption_ids(_fake_doc([table_item])) == set()
+
+
+# --------------------------------------------------------------------------- #
+# _build_tree: caption-like heading guard + claimed/unclaimed caption handling
+# --------------------------------------------------------------------------- #
+def test_caption_like_heading_does_not_open_new_section():
+    nodes = _build_tree(_fake_doc([
+        _section_header("1 Scope", level=1),
+        _text_item("Scope body text."),
+        _section_header("Table 1 continued", level=2),  # Docling mislabel
+        _text_item("More text after."),
+    ]))
+
+    assert len(nodes) == 1  # "Table 1 continued" never became a top-level section
+    scope = nodes[0]
+    assert scope.text == "1 Scope"
+    assert not any(c.type == "section" for c in scope.children)
+    assert any(c.type == "caption" and c.text == "Table 1 continued" for c in scope.children)
+
+
+def test_claimed_caption_nested_under_table_not_duplicated_as_sibling():
+    cap_item = _item(DocItemLabel.CAPTION, text="Table 1 -- caption")
+    table_item = _item(DocItemLabel.TABLE, captions=[cap_item], data=None)
+    nodes = _build_tree(_fake_doc([
+        _section_header("4.2.3 Limits"),
+        table_item,
+        cap_item,
+    ]))
+    section = nodes[0]
+
+    table_node = next(c for c in section.children if c.type == "table")
+    assert any(cc.type == "caption" for cc in table_node.children)
+    # not duplicated as a top-level sibling of the table
+    assert not any(c.type == "caption" for c in section.children)
+
+
+def test_unclaimed_caption_still_becomes_a_node_not_dropped():
+    # Mirrors the real-world finding: Docling can label an item CAPTION
+    # without linking it via any table/figure's .captions. Losing it
+    # entirely would violate "no content silently lost".
+    cap_item = _item(DocItemLabel.CAPTION, text="Figure 1 -- diagram")
+    nodes = _build_tree(_fake_doc([
+        _section_header("4.2 Radiated emissions"),
+        cap_item,
+    ]))
+    section = nodes[0]
+
+    assert len(section.children) == 1
+    assert section.children[0].type == "caption"
+    assert section.children[0].text == "Figure 1 -- diagram"
+
+
+# --------------------------------------------------------------------------- #
+# _build_tree: deep nesting (group/list hierarchy)
+# --------------------------------------------------------------------------- #
+def test_section_nesting_from_heading_levels():
+    nodes = _build_tree(_fake_doc([
+        _section_header("4 Test methods", level=1),
+        _text_item("intro"),
+        _section_header("4.1 General", level=2),
+        _text_item("general body"),
+        _section_header("4.2 Radiated", level=2),
+    ]))
+    assert len(nodes) == 1
+    top = nodes[0]
+    assert top.text == "4 Test methods"
+    subsections = [c for c in top.children if c.type == "section"]
+    assert [s.text for s in subsections] == ["4.1 General", "4.2 Radiated"]
+
+
+def test_nested_list_preserves_depth():
+    # A ListGroup with a ListItem that itself contains a nested ListGroup.
+    inner_li = _item(DocItemLabel.LIST_ITEM, text="inner a")
+    inner_group = _group(children=[inner_li])
+    outer_li_with_sub = _item(DocItemLabel.LIST_ITEM, text="outer 1", children=[inner_group])
+    outer_li_plain = _item(DocItemLabel.LIST_ITEM, text="outer 2")
+    list_group = _group(children=[outer_li_with_sub, outer_li_plain])
+
+    nodes = _build_tree(_fake_doc([
+        _section_header("4 Requirements"),
+        list_group,
+    ]))
+    section = nodes[0]
+
+    top_items = [c for c in section.children if c.type == "list_item"]
+    assert [li.text for li in top_items] == ["outer 1", "outer 2"]
+    # "outer 1" carries the nested list item as a child -> real depth preserved
+    nested = [c for c in top_items[0].children if c.type == "list_item"]
+    assert [n.text for n in nested] == ["inner a"]
+
+
+def test_group_container_is_flattened_but_contents_kept():
+    # A bare (unspecified) group directly under a section: the group emits no
+    # node of its own, but its children still land under the section.
+    grp = _group(children=[_text_item("para in group")])
+    nodes = _build_tree(_fake_doc([_section_header("1 Scope"), grp]))
+    section = nodes[0]
+    assert [c.type for c in section.children] == ["paragraph"]
+    assert section.children[0].text == "para in group"

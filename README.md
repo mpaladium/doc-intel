@@ -28,7 +28,7 @@ no code changes needed to move between the two.
 ```bash
 cd ingestion-engine
 uv sync              # installs runtime + dev dependencies into .venv
-uv run pytest -q     # 31 tests, ~20s
+uv run pytest -q     # 84 tests, ~25s
 ```
 
 On Linux with an NVIDIA GPU, `uv sync` installs whatever PyTorch wheel PyPI
@@ -52,7 +52,13 @@ inspector once processed:
 ./scripts/start_ingestion.sh /path/to/pdfs                    # http://127.0.0.1:8001
 DOCS_DIR=/path/to/pdfs ./scripts/start_ingestion.sh            # equivalent
 HOST=0.0.0.0 PORT=8080 ./scripts/start_ingestion.sh /path/to/pdfs  # bind elsewhere
+INGESTION_RELOAD=1 ./scripts/start_ingestion.sh /path/to/pdfs  # dev: auto-restart on source changes
 ```
+
+`INGESTION_RELOAD=1` watches source files (excluding `data/`, `.venv/`,
+caches) and restarts the server on change via uvicorn's `--reload`. Each
+restart re-runs the FastAPI lifespan's Docling model warm-up (a few
+seconds) — expected, not a bug. Not recommended for production use.
 
 Open `http://127.0.0.1:8001/` — every PDF under `DOCS_DIR` (searched
 recursively) shows up with a status (`ready` / `not processed`) and, for
@@ -97,6 +103,28 @@ version always resolve to the same `edition_id`
 (`sha256(pdf) + PIPELINE_VERSION`), and a repeat call is a fast no-op (200,
 not reprocessed). See `app/store/artifact_store.py` and
 `../docs/ARCHITECTURE.md` §0.
+
+## Accuracy check (source-vs-extraction)
+
+To verify factual accuracy against the source documents — per page, per
+component — run the accuracy checker over N random PDFs:
+
+```bash
+./scripts/accuracy_check.sh -n 3            # random sample, seed logged
+./scripts/accuracy_check.sh --seed 7        # reproducible
+```
+
+It compares each extracted `CanonicalEdition` against the source PDF's own
+text layer (ground truth for born-digital pages) and reports, per page:
+token **coverage**, table **numeric fidelity**, **reading-order** Kendall tau,
+and a **genuine-miss** set — after excluding page furniture (headers/footers,
+rotated watermarks, lines repeated across pages), excluded front-matter, and
+hyphenation/wrap fragments (which extraction correctly rejoins). Reports land
+in `data/eval-reports/accuracy-*.json`. See `app/cli/accuracy.py` for the
+measurement design. Note: because artifacts are content-addressed by
+`sha256(pdf)+PIPELINE_VERSION`, bump `PIPELINE_VERSION` (`app/version.py`)
+whenever extraction behavior changes, or cached editions from old code will be
+served — the checker will read stale output otherwise.
 
 ## Batch evaluation (run in background)
 
@@ -163,6 +191,55 @@ The startup log line shows what was actually selected:
 ingestion-engine ready: device=AcceleratorDevice.AUTO num_threads=8 max_concurrent_parses=1
 ```
 
+## Pipeline
+
+`quarantine -> triage -> route -> extract(Docling) -> lattice -> topology ->
+continuity -> canon.units -> canon.equation -> lang -> classify.section_role ->
+nest_by_clause -> xref -> assemble`.
+
+- `triage` measures each page's text-layer quality
+  (`DIGITAL_CLEAN`/`DIGITAL_DIRTY`/`SCANNED`/`UNCERTAIN`, PyMuPDF stats) and
+  `route` looks up the extractor priority table (`app/config/ownership.yaml`)
+  — both feed confidence/review flags and are recorded in
+  `pipeline_provenance` (`page_classes`, `engine_by_page`).
+- `extract` walks Docling's real `body` tree, preserving **deep list/group
+  nesting** and section hierarchy. Table/figure **captions** become
+  `"caption"`-typed nodes tied to their table/figure. **Formulas** (Docling
+  formula enrichment, `INGESTION_FORMULAS`, default on) become `"equation"`
+  nodes with LaTeX in `Node.latex`.
+- `continuity` stitches multi-page tables and assigns **multi-row, span-aware
+  column `header_path` lineage** from the extractor's own header-cell flags.
+- `canon.equation` normalizes LaTeX (and wraps chemistry as mhchem `\ce{}`);
+  `lang` NFC-normalizes text and tags each node's language (`Node.lang`,
+  `lang_primary`) via offline `lingua`.
+- `topology` assigns `clause_id` from **leading or trailing** heading numbers
+  ("4.2.3 Limits" and German "Grenzwertklassen 5.3.4"), then `nest_by_clause`
+  rebuilds the flat section list into the real **clause hierarchy** (`5.3.5.1`
+  under `5.3.5` → `5.3` → `5`) — the compliance tree, not a flat list.
+- `canon.units` parses each table cell into `{value, unit, condition}`
+  (`Cell.quantity`) — the value-level signal for limit changes (40 → 30
+  dBµV/m). `xref` records cross-references ("see 4.2.3", "Table 22",
+  "Anhang ZA") on `Node.xrefs`, resolving clause/annex targets within the
+  edition.
+
+## Evaluating extraction on real documents
+
+`./scripts/eval_samples.sh` picks random PDFs from a sample directory, runs
+the pipeline, and reports per-document quality metrics (page classes, table
+`header_path` coverage, nesting depth, language coverage, equation/LaTeX
+coverage, review counts) to `data/eval-reports/`:
+
+```bash
+./scripts/eval_samples.sh                 # 3 random docs
+EVAL_N=5 ./scripts/eval_samples.sh
+./scripts/eval_samples.sh --seed 42       # reproducible sample (seed logged each run)
+```
+
+Sample dir resolution: `--docs-dir` / `$EVAL_DOCS_DIR` / the configured
+QuickSamples path / `./data/eval-samples`. On macOS, reading PDFs under
+`~/Documents` requires granting the terminal **Full Disk Access** (System
+Settings → Privacy & Security), or just copy PDFs into `data/eval-samples/`.
+
 ## Layout
 
 ```
@@ -170,10 +247,14 @@ app/
   api.py                  FastAPI: GET /, POST /parse, GET /editions/{hash}(/ui|/pages/{n}.png),
                             GET /documents, POST /documents/{path}/parse
   cli/evaluate_dir.py      batch-processes every PDF under a directory (no server needed)
+  cli/evaluate_samples.py  random-sampling quality-eval harness (+ eval_metrics.py)
   pipeline/                quarantine -> triage -> route -> extract(Docling) -> lattice
-                            -> topology -> continuity -> classify.section_role -> assemble
+                            -> topology -> continuity -> canon_equation -> lang
+                            -> classify.section_role -> assemble
                             run.py: process_pdf() -- the one pipeline entrypoint the API
                             and the batch CLI both call
+                            canon_equation.py (LaTeX/mhchem normalization),
+                            lang.py (NFC + per-node language)
   store/                   artifact_store.py (content-addressed filesystem store)
                             documents.py (DOCS_DIR listing, re-derived on every request)
                             rasterize.py (page images for the UI)
@@ -181,7 +262,7 @@ app/
   config/ownership.yaml    OWNERSHIP priority table (extractor per content-type/page-class)
 canonical_schema.py        shared contract with comparison-engine (Goal 2, not in this repo yet)
 rulepacks/section_roles.yaml   multilingual front-matter dictionary (confidence booster only)
-scripts/                   start_ingestion.sh, start_ui.sh, evaluate_dir.sh
+scripts/                   start_ingestion.sh, start_ui.sh, evaluate_dir.sh, eval_samples.sh
 tests/                     pytest suite + tests/fixtures/make_test_pdf.py (synthetic standard)
 ```
 

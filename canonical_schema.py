@@ -39,19 +39,50 @@ class Provenance(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
 
 
+class Quantity(BaseModel):
+    """A compliance value parsed out of a table cell (canon.units, SKILLS.md).
+    `value` keeps the surface form (range/comparator preserved: "30-230",
+    "<=40", "0.5") so nothing is lost; `unit` is normalized for comparison
+    (dBuV/m -> dBµV/m, m/s2 -> m/s^2); `condition` captures an inline qualifier
+    ("at 3 m", "peak"). This is the value-level signal comparison-engine needs
+    to see a limit tighten (e.g. 40 -> 30 dBµV/m)."""
+    value: str
+    unit: Optional[str] = None
+    condition: Optional[str] = None
+
+
 class Cell(BaseModel):
     row: int
     col: int
     rowspan: int = 1
     colspan: int = 1
     header_path: list[str] = Field(default_factory=list)  # diff identity, not grid position
+    is_column_header: bool = False   # from the extractor's own header detection; drives
+                                     # multi-row header_path lineage (continuity.header_path)
     text: str
+    # Cell-level provenance (ARCHITECTURE.md §1.9). A table is the one element
+    # whose sub-parts can span pages: continuity.stitch merges a continuation
+    # table onto the previous page's node, so the node's single provenance.page
+    # is NOT the page of every cell. Each cell therefore carries its own source
+    # page/bbox (Docling bottom-left origin, same convention as Provenance.bbox),
+    # populated at extraction and preserved through the stitch merge. Optional so
+    # hand-constructed cells / older data stay valid.
+    page: Optional[int] = None
+    bbox: Optional[tuple[float, float, float, float]] = None
+    # Structured {value, unit, condition} for a cell that holds a measurement,
+    # populated by canon.units. None for label/prose cells.
+    quantity: Optional[Quantity] = None
 
 
 NodeType = Literal[
     "section", "heading", "paragraph", "table",
-    "equation", "figure", "note", "list_item",
+    "equation", "figure", "note", "list_item", "caption",
 ]
+# A "caption" node is always a child of the table/figure it describes --
+# parent-of-caption is expressed by tree position alone, not a back-link
+# field, consistent with how this schema avoids redundant cross-references
+# elsewhere (e.g. Cell.header_path names columns rather than pointing at a
+# header Cell by id).
 
 SectionRole = Literal[
     "normative",          # body content: requirements, tables, definitions, normative annexes
@@ -74,6 +105,21 @@ SectionRole = Literal[
 ]
 
 
+XRefKind = Literal["clause", "annex", "table", "figure", "section", "external"]
+
+
+class XRef(BaseModel):
+    """A cross-reference found in a node's text ("see 4.2.3", "Table 22",
+    "Anhang ZA"). Within-edition annotation produced by `topology`/`xref`, not a
+    comparison graph edge (that's comparison-engine's REFERENCES, ARCHITECTURE.md
+    §3.2). `target_clause_id` is set when the reference resolves to a clause/annex
+    that actually exists in this edition; unresolved/table/figure refs keep it
+    None but still record the reference so nothing is silently dropped."""
+    kind: XRefKind
+    text: str                              # matched surface, e.g. "4.2.3", "Table 22"
+    target_clause_id: Optional[str] = None  # resolved within-edition, if present
+
+
 class Node(BaseModel):
     id: str                          # stable WITHIN an edition
     type: NodeType
@@ -82,6 +128,7 @@ class Node(BaseModel):
     text: Optional[str] = None       # NFC-normalized
     latex: Optional[str] = None      # canonicalized
     cells: Optional[list[Cell]] = None
+    xrefs: list[XRef] = Field(default_factory=list)  # cross-references in this node's text
     children: list["Node"] = Field(default_factory=list)
     provenance: Provenance
     review_required: bool = False    # true if ANY reason below applies

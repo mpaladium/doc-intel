@@ -6,7 +6,195 @@ tag releases yet, so entries are grouped by work session instead of version.
 
 ## Unreleased
 
+### Added — accurate compliance clause tree (topology, units, cross-refs)
+- **Clause-number-driven hierarchy** (`topology.nest_by_clause`, wired into
+  `assemble`). The tree was **flat** — every section a sibling — because
+  `_build_tree` nests only by Docling's typographic heading level, which is
+  uniform across clause depths in real standards. Now `5.3.5.1` nests under
+  `5.3.5` → `5.3` → `5` using the clause number as the authoritative parent
+  key. On a real German TL 81000 doc: was 0 clause_ids / depth 1 → now
+  **16/23 clause_ids, depth 4**. Front/back matter and annexes stay top-level
+  (never buried under the last clause); missing intermediate parents attach to
+  the nearest present ancestor.
+- **Trailing clause-number parsing** (`topology.assign_clause_ids`). German
+  TL/DIN headings put the number at the END ("Grenzwertklassen 5.3.4",
+  "Prüfaufbau 5.3.5.1"); the old regex only matched leading numbers, so those
+  docs got **0 clause_ids**. Both positions are now parsed, with guards so
+  dates ("2009-04-01"), standard numbers ("IEC 61000-4-3"), and trailing
+  figure counts ("Prüffeldstärke 2") are not mistaken for clauses.
+- **`canon.units`** (`app/pipeline/canon_units.py`, `Cell.quantity`): parses a
+  table cell's `{value, unit, condition}` — the value-level signal
+  comparison-engine needs to see a limit change (40 → 30 dBµV/m) rather than
+  diffing raw strings. Curated EMC unit vocabulary (dBµV/m, MHz, m/s², µA, …),
+  German decimal comma, comparators/ranges preserved, unit filled from the
+  column header when the cell is a bare value. Conservative: prose cells
+  ("Test Sec.3 [14.6]") are never parsed. On a real doc: **279/358 data cells**
+  got structured quantities.
+- **Cross-reference resolution** (`app/pipeline/xref.py`, `Node.xrefs`,
+  `canonical_schema.XRef`): detects "see 4.2.3", "siehe 5.3.5", "Table 22",
+  "Bild 15", "Anhang ZA" (EN + DE lead words) and resolves clause/annex
+  references to the target `clause_id` when it exists in the edition. This is
+  the "xref edges" half of `topology.clauses` (SKILLS.md), recorded as
+  within-edition annotations (not comparison-engine graph edges). Conservative:
+  plain numbers in prose are not treated as references.
+- Regression tests: `tests/test_topology.py`, `tests/test_canon_units.py`,
+  `tests/test_xref.py`, plus e2e assertions that the fixture's clause tree is
+  nested and its table cells carry quantities + page provenance.
+
+### Added
+- **Per-page factual-accuracy checker** (`app/cli/accuracy.py`,
+  `app/cli/accuracy_check.py`, `scripts/accuracy_check.sh`): compares each
+  extracted `CanonicalEdition` against the source PDF's own text layer (ground
+  truth for born-digital pages) and reports faithfulness per page + per
+  component — token coverage, table numeric fidelity, reading-order Kendall
+  tau, and a genuine-miss set. The measurement separates real misses from
+  three expected-exclusion classes it detects rather than assumes: **furniture**
+  (top/bottom band, *rotated* watermarks like the Beuth side-margin licensing
+  stamp, and lines repeated across ≥3 pages), **front-matter** (excluded
+  sections), and **wrap fragments** (token-subset coverage makes a rejoined
+  hyphenated word a non-miss). Random sample each run, `--seed` to replay,
+  JSON report under `data/eval-reports/`. Unit-tested in
+  `tests/test_accuracy_check.py`.
+
 ### Fixed
+- **Table cells now carry their own page/bbox provenance**
+  (`canonical_schema.Cell.page` / `.bbox`, populated in
+  `extract_docling._table_cells`). A table is the one element whose sub-parts
+  can span pages: `continuity.stitch` merges a continuation table onto the
+  previous page's node, so the node's single `provenance.page` is not the page
+  of every cell. Cells previously had no provenance (an ARCHITECTURE.md §1.9
+  gap), so a stitched page-8 cell was attributed to page 7. This produced a
+  **false accuracy finding** — DNVGL-CG-0339 p8 looked like dropped table text
+  ("Electrical slow transient", "surge"). It was **not** dropped: Docling's raw
+  table has it (0 empty cells), and p7/p8 share identical 6-column headers so
+  the stitch is a correct continuation. With per-cell pages the accuracy
+  checker attributes each cell to its real page; DNVGL went from
+  coverage 0.96 / 22 genuine misses to **coverage 1.0 / 0 genuine misses**.
+  (Corrects the earlier changelog note that blamed TableFormer — the real
+  cause was missing cell provenance, now fixed rather than deferred to a
+  MinerU swap-in.)
+- **Stale-cache extraction served indefinitely.** `PIPELINE_VERSION` was never
+  bumped across the formula/multilingual/nesting/caption/triage extraction
+  changes, so the content-address key (`sha256(pdf)+PIPELINE_VERSION`) stayed
+  constant and the artifact store kept serving editions produced by old
+  (sometimes buggy, near-empty) code. Surfaced by the accuracy checker: one
+  real doc read at **coverage 0.10** from a stale 7-node cached edition vs
+  **0.96** when re-extracted. `PIPELINE_VERSION` is now bumped whenever
+  extraction changes (currently `0.3.0-digital-only`) — the correct
+  content-address contract: extraction changes ⇒ key changes ⇒ old cache is
+  unreachable.
+- Accuracy checker's reading-order metric assumed a top-left origin; Docling
+  uses **bottom-left** (higher-on-page = larger y), so reading order is
+  *descending* y. `reading_order_tau` now accounts for this (was reporting −1
+  for correctly-ordered pages; real docs now score ~0.98–1.0).
+
+### Findings (real-doc accuracy baseline, random EMC/marine standards)
+- After the fixes above: coverage **0.95–1.0**, numeric fidelity **0.94–1.0**,
+  reading-order tau **~0.98–1.0**. Captured content is faithful; the residual
+  genuine misses are a couple of wrapped note lines (e.g. a German "Hinweis:"
+  note split across lines) — extraction has the text, the per-line check flags
+  the wrap. No systemic dropped-content defect remains on the sampled docs.
+
+### Added (real-doc eval + Goal-1 extractors: formulas, multilingual, tables, nesting)
+- **Random-sampling evaluation harness** (`app/cli/evaluate_samples.py` +
+  `scripts/eval_samples.sh`): picks N random PDFs from a sample dir
+  (`EVAL_DOCS_DIR` → the user's QuickSamples path → `./data/eval-samples`),
+  runs the full pipeline, and reports extraction-quality metrics per doc
+  (page-class mix, node-type counts, table `header_path` coverage + spans,
+  nesting depth + nested-list count, `Node.lang` coverage / languages /
+  non-NFC text, equation LaTeX coverage, review counts). Fresh random each
+  run; RNG seed logged for replay (`--seed`). Reports JSON to
+  `data/eval-reports/`. Metrics module `app/cli/eval_metrics.py` is pure and
+  unit-tested. (Note: reading the user's `~/Documents` sample set requires
+  granting the terminal macOS Full Disk Access, or copying PDFs into
+  `data/eval-samples/`.)
+- **Formulas / maths / chemical equations** (`extract.equation` +
+  `canon.equation`): Docling `do_formula_enrichment` enabled (behind
+  `INGESTION_FORMULAS`, default on) — `FormulaItem` LaTeX flows into
+  `Node.latex`; new `app/pipeline/canon_equation.py` normalizes LaTeX
+  (delimiters, `\left`/`\right`, spacing macros, whitespace; idempotent) so
+  equal-rendering equations compare equal, and wraps recognizably chemical
+  formulas/reactions as mhchem `\ce{...}`. MinerU stays the documented GPU
+  `OWNERSHIP` swap-in, not pulled in.
+- **Multilingual ingestion** (`lang.detect` + `text.normalize`): new
+  `app/pipeline/lang.py` tags each text node with a BCP-47 language and
+  NFC-normalizes all text; `CanonicalEdition.lang_primary` now populated from
+  the dominant language. Uses `lingua` (fully offline, bundled models, no
+  runtime download) restricted to a curated ~17-language set — fastText
+  `lid.176` (the doc's tool of record) doesn't build on this Python
+  toolchain; lingua is the offline-equivalent substitute.
+- **Deep nested content**: `extract_docling._build_tree` rewritten to walk
+  Docling's real `body` tree (resolving `children` refs) instead of the
+  flattened `iterate_items()`, so `ListGroup`/`ListItem` nesting and
+  list-under-clause depth are preserved rather than collapsed to siblings.
+  Section nesting (heading-level stack) and group/list nesting are now
+  layered correctly; structural group containers are flattened without
+  losing their contents.
+- **Accurate table extraction**: `continuity.py` now uses the extractor's
+  per-cell `column_header` flag (new `Cell.is_column_header`) instead of
+  assuming "header = row 0", giving correct **multi-row, span-aware**
+  `header_path` lineage; stitch detection compares normalized (NFC+casefold)
+  full header-row signatures plus column-count agreement, so continuations
+  merge and unrelated same-shape tables don't. (TableFormer was already in
+  accurate mode.)
+- Tests: `tests/test_eval_metrics.py`, `tests/test_canon_equation.py`,
+  `tests/test_lang.py`, `tests/test_continuity.py`, plus new nesting/formula
+  cases in `tests/test_extract_docling.py` (now stub the Docling `body` tree).
+  `tests/conftest.py` disables formula enrichment for the suite (kept fast +
+  offline; the formula path is covered by fast stub/unit tests and by the
+  eval harness on real docs). 84 tests total.
+
+### Added
+- `INGESTION_RELOAD=1` dev flag for `scripts/start_ingestion.sh`: passes
+  `--reload` to uvicorn, watching the whole project root and excluding
+  `data/`, `.venv/`, `.git/`, caches, and fixture PDFs (the artifact store
+  and `DOCS_DIR` both default under `./data` and both mutate on every
+  parse — watching them would thrash the reloader). Each restart re-runs
+  the FastAPI lifespan's Docling model warm-up.
+- `triage.py`/`route.py` are now actually wired into the pipeline
+  (`app/pipeline/assemble.py`) instead of being unused, fully-tested dead
+  code. Every page is now really classified `DIGITAL_CLEAN` /
+  `DIGITAL_DIRTY` / `SCANNED` / `UNCERTAIN` via PyMuPDF text-layer stats
+  (`triage.classify_document`), and nodes on a non-`DIGITAL_CLEAN` page get
+  a downgraded confidence (`DIGITAL_DIRTY: 0.75, SCANNED: 0.5,
+  UNCERTAIN: 0.6`, replacing the flat 0.95 placeholder) plus
+  `review_required=True` and a `page_class_*` reason — this is what makes
+  the confidence-sorted inspector actually correlate with real page quality
+  instead of every born-digital node looking equally trustworthy
+  (ARCHITECTURE.md §2.3). `route.Ownership` is also exercised (not yet
+  behavior-changing, since only Docling is wired in) and recorded per page
+  in `pipeline_provenance["engine_by_page"]` for forward compatibility once
+  OCR/equation extractors are added. `pipeline_provenance["page_classes"]`
+  is recorded for auditability.
+- `canonical_schema.py`: new `"caption"` `NodeType`.
+
+### Fixed
+- Table and figure captions were being extracted as generic `"paragraph"`
+  nodes (disconnected from the table/figure they describe) or, when
+  Docling's layout model mislabeled caption-like text ("Table 1 ...",
+  "Figure 2 ...") as a section heading, as spurious top-level `"section"`
+  nodes. `app/pipeline/extract_docling.py` now: resolves
+  `TableItem`/`PictureItem.captions` (a list of `RefItem`) via Docling's
+  own `ref.resolve(dldoc)` and nests the result as a `"caption"`-typed
+  child when Docling does populate that link; falls back to attaching an
+  unclaimed caption as its own correctly-typed node at its reading-order
+  position when Docling doesn't (confirmed empirically that `.captions`
+  isn't reliably populated even for an adjacent caption — a design that
+  only trusted it would have silently dropped captions); and guards the
+  heading branch so caption-like text never opens a spurious section.
+  `extract()` was split into `extract()` (I/O) + `_build_tree(dldoc)`
+  (pure) to make this testable against stub `dldoc` objects without a real
+  Docling conversion. Covered by 7 new tests in `test_extract_docling.py`
+  and 4 new tests in `test_pipeline_e2e.py`; the test fixture
+  (`tests/fixtures/make_test_pdf.py`) now includes a captioned table and a
+  captioned figure (previously had neither, which is why this shipped
+  unnoticed).
+- `scripts/start_ingestion.sh`: empty-array expansion
+  (`"${RELOAD_ARGS[@]}"`) crashed the server on startup under macOS's
+  default bash 3.2 (`set -u` + empty array is mishandled). Fixed by
+  building the whole uvicorn invocation as one command array and
+  conditionally appending to it, instead of expanding a separately-built,
+  possibly-empty array.
 - `app/pipeline/extract_docling.py`: `PictureItem` (images/charts) has no
   `.text` attribute either, same class of bug as the `TableItem` fix in
   0.2.0 — raised an unhandled `AttributeError` (500) on any real-world PDF
