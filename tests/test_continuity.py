@@ -112,3 +112,49 @@ def test_stitch_preserves_each_cells_source_page():
     assert page_of["30-230"] == 7
     assert page_of["230-1000"] == 8  # continuation data cell keeps page 8
     assert sorted({c.page for c in merged.cells}) == [7, 8]
+
+
+# --------------------------------------------------------------------------- #
+# Stitch decision F1 (SKILLS.md gate: continuity.stitch F1 >= 0.95). A
+# deterministic gold set of continuation / non-continuation table pairs; the
+# stitch decision must score F1 = 1.0 on it. Guards against a regression that
+# either over-merges (unrelated tables) or under-merges (real continuations).
+# --------------------------------------------------------------------------- #
+def _hdr_row(cols):
+    return [_hdr(0, i, c) for i, c in enumerate(cols)]
+
+
+def _stitch_decision(prev_cells, next_cells) -> bool:
+    """Did the stitcher merge these two adjacent tables into one?"""
+    section = Node(id="s", type="section", provenance=_prov(),
+                   children=[_table(prev_cells), _table(next_cells)])
+    out = continuity.stitch([section])[0]
+    return len([c for c in out.children if c.type == "table"]) == 1
+
+
+def test_stitch_decision_f1_on_gold_pairs():
+    same_hdr = _hdr_row(["Freq", "Limit"])
+    # (prev, next, should_merge)
+    gold = [
+        # true continuations: same columns + repeated header
+        (same_hdr + [_data(1, 0, "30-230"), _data(1, 1, "40")],
+         _hdr_row(["Freq", "Limit"]) + [_data(1, 0, "230-1000"), _data(1, 1, "47")], True),
+        (_hdr_row(["A", "B", "C"]) + [_data(1, 0, "1"), _data(1, 1, "2"), _data(1, 2, "3")],
+         _hdr_row(["A", "B", "C"]) + [_data(1, 0, "4"), _data(1, 1, "5"), _data(1, 2, "6")], True),
+        # non-continuations
+        (same_hdr + [_data(1, 0, "x"), _data(1, 1, "y")],
+         _hdr_row(["Voltage", "Time"]) + [_data(1, 0, "a"), _data(1, 1, "b")], False),  # diff header
+        (_hdr_row(["Freq", "Limit"]) + [_data(1, 0, "x"), _data(1, 1, "y")],
+         _hdr_row(["Freq"]) + [_data(1, 0, "z")], False),  # diff column count
+    ]
+    tp = fp = fn = tn = 0
+    for prev, nxt, should in gold:
+        merged = _stitch_decision(prev, nxt)
+        if should and merged: tp += 1
+        elif should and not merged: fn += 1
+        elif not should and merged: fp += 1
+        else: tn += 1
+    precision = tp / (tp + fp) if (tp + fp) else 1.0
+    recall = tp / (tp + fn) if (tp + fn) else 1.0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 1.0
+    assert f1 == 1.0, f"stitch F1={f1} (tp={tp} fp={fp} fn={fn} tn={tn})"

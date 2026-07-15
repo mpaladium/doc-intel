@@ -111,3 +111,79 @@ def test_annex_resets_to_top_level():
     nested = topology.nest_by_clause(flat)
     top = [n.clause_id for n in nested if n.type == "section"]
     assert "Annex A" in top  # not buried under 5.3
+
+
+# --------------------------------------------------------------------------- #
+# Numbered non-heading nodes: list_item / title paragraph clause_ids
+# --------------------------------------------------------------------------- #
+def _typed(type_, text, page=1, children=None):
+    return Node(id=f"n{id(text)}", type=type_, text=text, children=children or [],
+                provenance=_prov(page))
+
+
+def test_list_item_with_leading_number_gets_clause_id():
+    # DNVGL "16.1 Flame-retardant test." -- Docling joins number+title but types
+    # it a list_item, which the old section/heading-only pass skipped.
+    root = _typed("section", None, children=[_typed("list_item", "16.1 Flame-retardant test.")])
+    out = topology.assign_clause_ids(root)
+    assert out.children[0].clause_id == "16.1"
+
+
+def test_title_paragraph_with_leading_number_gets_clause_id():
+    root = _typed("section", None, children=[_typed("paragraph", "3.20 Regelkreis")])
+    out = topology.assign_clause_ids(root)
+    assert out.children[0].clause_id == "3.20"
+
+
+def test_prose_paragraph_mentioning_a_number_is_not_a_clause():
+    # Guard: a numbered value in a sentence must not become a clause_id.
+    long_prose = "3.2 m/s applies to the device under the stated test conditions here"
+    root = _typed("section", None, children=[_typed("paragraph", long_prose)])
+    out = topology.assign_clause_ids(root)
+    assert out.children[0].clause_id is None
+
+
+# --------------------------------------------------------------------------- #
+# Lone-number merge (two-column clause layout)
+# --------------------------------------------------------------------------- #
+def test_lone_number_merges_into_following_section():
+    # "3.2" (lone) then its term "tatsächliche Bewegung" (separate section).
+    top = [
+        _typed("section", "3 Begriffe", children=[_typed("paragraph", "3.2")]),
+        _typed("section", "tatsächliche Bewegung"),
+    ]
+    merged = topology.merge_split_clause_numbers(top)
+    # lone "3.2" dropped; number prepended to the term
+    assert not any(n.text == "3.2" for n in topology._iter_reading_order(merged))
+    term = [n for n in topology._iter_reading_order(merged) if "tatsächliche" in (n.text or "")][0]
+    assert term.text == "3.2 tatsächliche Bewegung"
+    # assign_clause_ids then labels it
+    labeled = [topology.assign_clause_ids(n) for n in merged]
+    assert any(n.clause_id == "3.2" for n in topology._iter_reading_order(labeled))
+
+
+def test_lone_number_not_merged_across_pages():
+    top = [
+        _typed("section", "S", children=[_typed("paragraph", "3.2", page=1)]),
+        _typed("section", "Different clause term", page=2),
+    ]
+    merged = topology.merge_split_clause_numbers(top)
+    assert any(n.text == "3.2" for n in topology._iter_reading_order(merged))
+
+
+def test_lone_number_not_merged_into_long_sentence():
+    top = [
+        _typed("section", "S", children=[_typed("paragraph", "3.2")]),
+        _typed("paragraph", "This is a full sentence of body text that happens to follow the number node"),
+    ]
+    merged = topology.merge_split_clause_numbers(top)
+    assert any(n.text == "3.2" for n in topology._iter_reading_order(merged))
+
+
+def test_lone_number_not_merged_when_target_already_numbered():
+    top = [
+        _typed("section", "S", children=[_typed("paragraph", "3.2")]),
+        _typed("section", "4.1 Already a clause"),
+    ]
+    merged = topology.merge_split_clause_numbers(top)
+    assert any(n.text == "3.2" for n in topology._iter_reading_order(merged))

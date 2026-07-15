@@ -181,6 +181,10 @@ HEADING_MAX_WORDS = 8        # a clause heading is a title, not a sentence
 # (dot-leader + page number) are excluded because a page-range chunk's TOC
 # legitimately lists clauses that live in other chunks.
 _TOC_SHAPE = re.compile(r"[.\s]{2,}\d{1,4}\s*$")
+# Standards-metadata codes whose "N.N" looks like a clause number but isn't:
+# ICS (International Classification for Standards, "ICS 19.040"), CCS, UDC.
+# These sit on cover/metadata pages, never a clause heading.
+_METADATA_CODE_PREFIX = re.compile(r"^(?:ics|ccs|udc)\b", re.IGNORECASE)
 
 # Strong math markers only: these are vanishingly rare in prose/tables of these
 # standards (unlike ±, ≤, µ which appear in ordinary limit cells), so a page
@@ -199,6 +203,8 @@ def clause_heading_candidate(line: SourceLine) -> str | None:
     text = line.text.strip()
     if not text or len(text) > HEADING_MAX_CHARS:
         return None
+    if _METADATA_CODE_PREFIX.match(text):
+        return None  # ICS/CCS/UDC classification code, not a clause
     if _TOC_SHAPE.search(text):
         return None  # TOC entry, not a heading
     if len(text.split()) > HEADING_MAX_WORDS:

@@ -246,10 +246,16 @@ assemble`.
 - `canon.equation` normalizes LaTeX (and wraps chemistry as mhchem `\ce{}`);
   `lang` NFC-normalizes text and tags each node's language (`Node.lang`,
   `lang_primary`) via offline `lingua`.
-- `topology` assigns `clause_id` from **leading or trailing** heading numbers
-  ("4.2.3 Limits" and German "Grenzwertklassen 5.3.4"), then `nest_by_clause`
-  rebuilds the flat section list into the real **clause hierarchy** (`5.3.5.1`
-  under `5.3.5` → `5.3` → `5`) — the compliance tree, not a flat list.
+- `topology` first **reunites two-column split clauses**
+  (`merge_split_clause_numbers`: a lone gutter number "3.2" + its separate
+  term "tatsächliche Bewegung" → one node), then assigns `clause_id` from
+  **leading or trailing** heading numbers (and numbered `list_item`s like
+  "16.1 Flame-retardant test."), then `nest_by_clause` rebuilds the flat
+  section list into the real **clause hierarchy** (`5.3.5.1` under `5.3.5` →
+  `5.3` → `5`) — the compliance tree, not a flat list.
+- `nested_table` flags (never fabricates) a table that TableFormer flattened —
+  a cell holding a uniform mini-grid gets the table `review_required` +
+  `possible_nested_table` so a human sees it.
 - `canon.units` parses each table cell into `{value, unit, condition}`
   (`Cell.quantity`) — the value-level signal for limit changes (40 → 30
   dBµV/m). `xref` records cross-references ("see 4.2.3", "Table 22",

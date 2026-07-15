@@ -49,15 +49,102 @@ def _extract_clause_id(heading_text: str) -> str | None:
     return None
 
 
+# A node whose text is *exactly* a clause number (nothing else) -- the
+# left-gutter number of a two-column clause layout, split from its title.
+_LONE_CLAUSE_NUMBER = re.compile(
+    r"^\s*(?:\d{1,3}(?:\.\d{1,3})*|(?:annex|anhang|annexe)\s+[A-Z]{1,3})\s*$",
+    re.IGNORECASE,
+)
+# A list_item / paragraph carrying a clause number then a non-numeric title,
+# e.g. "16.1 Flame-retardant test." -- Docling joined number+title but typed it
+# a list_item, so assign_clause_ids (section/heading only) skips it.
+_NUMBERED_TITLE = re.compile(r"^\s*(\d{1,3}(?:\.\d{1,3})+)\s+\D")
+_TITLE_MAX_WORDS = 12       # a clause title is short (list_item / merge target)
+_PARA_TITLE_MAX_WORDS = 6   # a bare paragraph is stricter: a definition term, not prose
+
+
+def _iter_reading_order(nodes: list[Node]):
+    for n in nodes:
+        yield n
+        yield from _iter_reading_order(n.children)
+
+
+def merge_split_clause_numbers(top_sections: list[Node]) -> list[Node]:
+    """Reunite a two-column clause layout where Docling emitted the clause
+    number and its title/term as *separate* nodes (common in ISO/DIN
+    definition lists: "3.2" in the left gutter, "tatsächliche Bewegung"
+    beside it). In reading order a lone-number node immediately followed by a
+    short section/heading on the same page has its number prepended to that
+    heading and is dropped, so `assign_clause_ids` then labels it normally and
+    `nest_by_clause` nests it under its parent clause.
+
+    Fail-safe: only merges when the number is a node's *entire* text, the next
+    node is a short title-shaped section/heading with no clause number of its
+    own, and both sit on the same page -- never guesses across unrelated
+    content."""
+    order = list(_iter_reading_order(top_sections))
+    drop_ids: set[int] = set()
+    new_text: dict[int, str] = {}
+
+    for a, b in zip(order, order[1:]):
+        if id(a) in drop_ids or not a.text or not b.text:
+            continue
+        # The title/term may be a section, heading, or (Docling's typing
+        # varies for definition terms) a short paragraph / list_item. Tables,
+        # figures, captions, equations are never a clause title.
+        if b.type not in ("section", "heading", "paragraph", "list_item"):
+            continue
+        if not _LONE_CLAUSE_NUMBER.match(a.text.strip()):
+            continue
+        if a.provenance.page != b.provenance.page:
+            continue
+        if len(b.text.split()) > _TITLE_MAX_WORDS:
+            continue
+        if _extract_clause_id(b.text) is not None:
+            continue  # title already carries a number -- unrelated adjacency
+        drop_ids.add(id(a))
+        new_text[id(b)] = f"{a.text.strip()} {b.text.strip()}"
+
+    if not drop_ids:
+        return top_sections
+
+    def _rebuild(nodes: list[Node]) -> list[Node]:
+        out: list[Node] = []
+        for n in nodes:
+            if id(n) in drop_ids:
+                continue
+            update: dict = {"children": _rebuild(n.children)}
+            if id(n) in new_text:
+                update["text"] = new_text[id(n)]
+            out.append(n.model_copy(update=update))
+        return out
+
+    return _rebuild(top_sections)
+
+
 def assign_clause_ids(node: Node) -> Node:
-    """Depth-first: any section/heading node whose text carries a numbered or
-    Annex clause label (leading or trailing) gets a normalized `clause_id`.
+    """Depth-first: a node whose text carries a numbered or Annex clause label
+    gets a normalized `clause_id`. `section`/`heading` nodes match a leading OR
+    trailing number; `list_item` nodes (and title-shaped paragraphs) match only
+    a LEADING number + non-numeric title ("16.1 Flame-retardant test."), so an
+    ordinary prose paragraph that merely mentions a clause is never mislabeled.
     Returns a new tree (children rebuilt bottom-up)."""
     new_children = [assign_clause_ids(child) for child in node.children]
     update: dict = {"children": new_children}
 
-    if node.type in ("section", "heading") and node.clause_id is None and node.text:
-        clause_id = _extract_clause_id(node.text)
+    if node.clause_id is None and node.text:
+        clause_id = None
+        if node.type in ("section", "heading"):
+            clause_id = _extract_clause_id(node.text)
+        elif node.type in ("list_item", "paragraph"):
+            # stricter: leading numbered title only, and title-shaped (short),
+            # so "3.2 m/s applies in ..." (prose) is not treated as clause 3.2.
+            # A list_item is already a title by Docling's typing; a bare
+            # paragraph is held to a much shorter length (a definition term).
+            max_words = _TITLE_MAX_WORDS if node.type == "list_item" else _PARA_TITLE_MAX_WORDS
+            if _NUMBERED_TITLE.match(node.text) and len(node.text.split()) <= max_words:
+                clause_id = _LEADING_NUMERIC.match(node.text.strip())
+                clause_id = clause_id.group(1) if clause_id else None
         if clause_id is not None:
             update["clause_id"] = clause_id
 

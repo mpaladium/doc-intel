@@ -28,7 +28,8 @@ import fitz  # PyMuPDF
 
 from canonical_schema import CanonicalEdition, Node, Provenance
 from app.pipeline import (
-    canon_equation, canon_units, caption_attach, continuity, lang, lattice, topology, triage, xref,
+    canon_equation, canon_units, caption_attach, continuity, lang, lattice, nested_table,
+    topology, triage, xref,
 )
 from app.pipeline.extract_docling import DOCLING_VERSION, extract
 from app.pipeline.route import Ownership
@@ -125,9 +126,11 @@ def assemble(pdf_bytes: bytes, source_sha256: str, ocr_enabled: bool = False) ->
     top_sections = caption_attach.attach_captions_by_proximity(top_sections)
     top_sections = [_apply_triage(n, page_classes) for n in top_sections]
     top_sections = lattice.reconcile(top_sections)
+    top_sections = topology.merge_split_clause_numbers(top_sections)  # reunite two-column clauses
     top_sections = [topology.assign_clause_ids(n) for n in top_sections]
     top_sections = continuity.stitch(top_sections)
     top_sections = continuity.assign_header_paths(top_sections)
+    top_sections = [nested_table.flag_nested_tables(n) for n in top_sections]  # fail-toward-review
     top_sections = [canon_units.annotate_node(n) for n in top_sections]  # {value,unit,condition}
     top_sections = [canon_equation.canonicalize_node(n) for n in top_sections]
     top_sections = [lang.annotate_node(n) for n in top_sections]  # NFC + per-node lang

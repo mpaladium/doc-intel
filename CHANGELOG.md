@@ -6,6 +6,66 @@ tag releases yet, so entries are grouped by work session instead of version.
 
 ## Unreleased
 
+### Added — clause reunification + honest scorecard (heading-recall accuracy)
+- **Reunite two-column split clauses** (`topology.merge_split_clause_numbers`,
+  wired into `assemble` before `assign_clause_ids`). ISO/DIN definition lists
+  put the clause number in a left gutter and its term beside it, which Docling
+  emits as *separate* nodes ("3.2" as a lone paragraph, "tatsächliche
+  Bewegung" as a separate section). A reading-order pass prepends a lone
+  clause-number node to the short title/term immediately following it on the
+  same page and drops the lone node, so the definition is reunited
+  ("3.2 tatsächliche Bewegung") and `assign_clause_ids`/`nest_by_clause` label
+  and nest it. Fail-safe: only when the number is a node's *entire* text and
+  the next node is a short (≤12-word) title with no clause number of its own.
+  On DIN 60068 all 23 of the `3.x` definitions (incl. `3.4.1`/`3.4.2`) now
+  carry clause_ids and reunited titles, from 0 before.
+- **Clause_ids on numbered `list_item`/title nodes**: `assign_clause_ids`
+  previously labeled only `section`/`heading`. Docling correctly joins a
+  numbered list entry ("16.1 Flame-retardant test.") but types it
+  `list_item`, so it got no clause_id. Now `list_item`s (and short title-like
+  paragraphs, held to a stricter ≤6-word bar to exclude prose like
+  "3.2 m/s applies…") with a leading numbered title get a clause_id too. Fixes
+  DNVGL-CG-0339's 17 `16.x` clauses.
+- **Scorecard honesty** (`accuracy.clause_heading_candidate`): reject
+  standards-classification codes (`ICS 19.040`, `CCS …`, `UDC …`) that look
+  like clause numbers but sit on cover/metadata pages — so heading recall
+  measures real clause headings, not cover metadata.
+- **Deep-nested-table review flag** (`app/pipeline/nested_table.py`): a table
+  cell holding a uniform mini-grid (≥2 lines, all with the same ≥2 column
+  count) is TableFormer flattening a table-in-cell; we can't faithfully
+  reconstruct the inner grid, so the outer table node is flagged
+  `review_required` + `possible_nested_table` (fail-toward-review, AGENTS
+  §1.6) rather than silently trusted. Column-count *consistency* is what
+  separates a nested grid from ordinary multi-line prose.
+- **`continuity.stitch` F1 gate** (SKILLS.md ≥0.95): a deterministic gold set
+  of continuation / non-continuation table pairs, asserting the stitch
+  decision scores F1 = 1.0 — guards against over- or under-merging
+  regressions.
+- `PIPELINE_VERSION` → `0.6.0` (clause reunification + nested-table flag both
+  change extraction output).
+
+**Corpus scorecard (34 docs, 339 pages), before → after:** clause-heading
+recall **83.3% → 91.2%** (549/659 → 599/657 — the two worst docs, DNVGL
+`16.x` and DIN `3.x`, went 4/21 → 21/21 and 10/25 → 23/23). Also fixed the
+scorecard itself: `extracted_clause_ids` now collects clause_ids from *all*
+node types, not just section/heading, or the `list_item`/paragraph
+enrichment above would have been invisible to the metric (it initially showed
+a spurious +0.9pt until this was corrected). Other components unchanged:
+paragraph 96.4%, caption 85.2%, table-region 99.1%, section-role gate 0/28.
+Genuine-miss lines moved 73 → 87, which is Docling/formula-VLM run variance
+between sessions (±14 lines out of ~5000+), not a regression — the clause
+merge preserves every page token and `nested_table` only sets review flags,
+so neither can raise per-page miss counts.
+
+### Remaining Goal-1 gaps (deferred, documented — not silently dropped)
+- `extract.table` TEDS ≥0.90 and `extract.equation` BLEU ≥0.90 gates need
+  labeled HTML/LaTeX ground truth; the TEDS-lite region-fidelity proxy (99.1%)
+  and formula-presence recall stand in until a labeled set exists.
+- `topology.clauses` IEC/CISPR per-standards-family rulepacks + their own gold
+  set; `extract.equation` MinerU/UniMERNet engine (Docling formula enrichment
+  substituted); `extract.ocr` Surya2 (RapidOCR path in place via OWNERSHIP);
+  annex normative-vs-informative distinction.
+
 ### Added — 98%-accuracy program: component scorecard, section-role gold set, OCR path
 - **Component scorecard** (`app/cli/accuracy.py`/`accuracy_check.py --all`):
   corpus-wide per-component metrics on top of the per-page factual-accuracy

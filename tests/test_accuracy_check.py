@@ -93,6 +93,12 @@ def test_clause_heading_candidate_rejects_toc_sentences_and_bare_ints():
     assert acc.clause_heading_candidate(_line("1 Scope", 400, 412)) is None
 
 
+def test_clause_heading_candidate_rejects_ics_metadata_code():
+    # "ICS 19.040" is a standards classification code, not clause 19.040.
+    assert acc.clause_heading_candidate(_line("ICS 19.040", 400, 412)) is None
+    assert acc.clause_heading_candidate(_line("CCS 33.100", 400, 412)) is None
+
+
 def test_heading_matches_by_clause_id_or_text():
     assert acc.heading_matches("5.3.4", "Grenzwertklassen 5.3.4", {"5.3.4"}, [])
     assert acc.heading_matches("9.9.9", "Prüfaufbau 9.9.9", set(), ["Prüfaufbau 9.9.9 extra"])

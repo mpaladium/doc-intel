@@ -6,5 +6,5 @@ so bumping it is what forces re-processing instead of silently serving stale
 output from an old pipeline version.
 """
 
-PIPELINE_VERSION = "0.5.1"  # proximity-based caption attachment (caption_attach.py)
+PIPELINE_VERSION = "0.6.0"  # clause reunification (split two-column + numbered list_items), nested-table flag
 SCHEMA_VERSION = "1.0"

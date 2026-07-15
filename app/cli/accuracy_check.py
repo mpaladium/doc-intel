@@ -114,11 +114,15 @@ def _component_metrics(edition: CanonicalEdition, doc: "fitz.Document",
     for n in _iter_nodes(edition.root):
         for c in n.children:
             parent_of[id(c)] = n
+        # A source clause number is "matched" if extraction produced ANY node
+        # with that clause_id -- section/heading, or a numbered list_item /
+        # title paragraph (topology labels those too). Restricting to
+        # section/heading would under-count the clause-enrichment fix.
+        if n.clause_id:
+            extracted_clause_ids.add(n.clause_id)
         if n.type in ("section", "heading"):
             if n.text:
                 all_headings.append(n.text)
-            if n.clause_id:
-                extracted_clause_ids.add(n.clause_id)
         elif n.type == "equation":
             equations_pages.add(n.provenance.page)
         elif n.type == "caption":
