@@ -1,7 +1,9 @@
 """Unit coverage for the eval harness metrics (app/cli/eval_metrics.py) --
 pure functions over a CanonicalEdition, so no Docling/model needed."""
 
-from canonical_schema import CanonicalEdition, Cell, Node, Provenance
+from decimal import Decimal
+
+from canonical_schema import CanonicalEdition, Cell, Node, Parameter, Provenance, Run
 from app.cli.eval_metrics import compute_metrics
 
 
@@ -15,11 +17,14 @@ def _node(type_, text=None, children=None, **kw):
                 children=children or [], **kw)
 
 
-def _edition(root, lang_primary=None, page_classes=None):
+def _edition(root, lang_primary=None, page_classes=None, gates=None):
+    prov = {"page_classes": page_classes or {}}
+    if gates is not None:
+        prov["gates"] = gates
     return CanonicalEdition(
         edition_id="e", source_sha256="s", schema_version="1.0",
         lang_primary=lang_primary, root=root,
-        pipeline_provenance={"page_classes": page_classes or {}},
+        pipeline_provenance=prov,
     )
 
 
@@ -91,3 +96,55 @@ def test_page_class_and_uncertain_rate():
     assert m.pages == 4
     assert m.page_class_counts["UNCERTAIN"] == 2
     assert m.uncertain_rate == 0.5
+
+
+def test_cdm_type_and_parameter_counts():
+    req = _node("paragraph", text="shall be 10 V/m", cdm_type="Requirement",
+               parameters=[Parameter(name="v", value=Decimal("10"), unit="V/m", comparator="gte")])
+    note = _node("paragraph", text="informative", cdm_type="Note")
+    plain = _node("paragraph", text="untyped")
+    root = _node("section", children=[req, note, plain])
+    m = compute_metrics("d.pdf", _edition(root))
+    assert m.cdm_type_counts == {"Requirement": 1, "Note": 1}
+    assert m.parameters_total == 1
+
+
+def test_runs_coverage_fraction():
+    run = [Run(text="x", font="A", size=10.0)]
+    with_runs = _node("paragraph", text="has runs", runs=run)
+    without_runs = _node("paragraph", text="no runs")
+    root = _node("section", children=[with_runs, without_runs])
+    m = compute_metrics("d.pdf", _edition(root))
+    assert m.text_nodes == 2
+    assert m.runs_coverage == 0.5
+
+
+def test_gates_summary_copied_from_pipeline_provenance():
+    root = _node("section")
+    gates = {"quarantined": 5, "repaired": 2,
+             "by_gate": {"units": {"quarantine": 3}, "run_integrity": {"quarantine": 2, "repair": 2}}}
+    m = compute_metrics("d.pdf", _edition(root, gates=gates))
+    assert m.gates_quarantined == 5
+    assert m.gates_repaired == 2
+    assert m.gates_by_gate == gates["by_gate"]
+
+
+def test_gates_default_to_zero_when_absent():
+    root = _node("section")
+    m = compute_metrics("d.pdf", _edition(root))
+    assert m.gates_quarantined == 0
+    assert m.gates_repaired == 0
+    assert m.gates_by_gate == {}
+
+
+def test_consensus_states_counted():
+    # the true review-queue size includes consensus quarantines (e.g. table
+    # geometry) not just gate outcomes
+    q = _node("table", text=None)
+    q = q.model_copy(update={"consensus": "quarantined"})
+    maj = _node("paragraph", text="x").model_copy(update={"consensus": "majority"})
+    ok = _node("paragraph", text="y")
+    root = _node("section", children=[q, maj, ok])
+    m = compute_metrics("d.pdf", _edition(root))
+    assert m.consensus_quarantined == 1
+    assert m.consensus_majority == 1

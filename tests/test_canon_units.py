@@ -44,6 +44,17 @@ def test_bare_value_without_unit_header_has_no_unit():
     assert q.value == "40" and q.unit is None
 
 
+def test_bare_value_takes_unit_from_prose_header():
+    # EMC tables often write the unit in prose, not parentheses
+    assert parse_quantity("100", header_path=["Frequenz in MHz"]).unit == "MHz"
+    assert parse_quantity("500", header_path=["P vor in W"]).unit == "W"
+
+
+def test_prose_header_in_does_not_misfire_on_substrings():
+    # "in" inside "within"/"min" must not trigger a spurious unit match
+    assert parse_quantity("5", header_path=["within tolerance"]).unit is None
+
+
 def test_prose_is_not_a_quantity():
     assert parse_quantity("Test Sec.3 [14.6]") is None
     assert parse_quantity("Electrical slow transient") is None

@@ -6,6 +6,188 @@ tag releases yet, so entries are grouped by work session instead of version.
 
 ## Unreleased
 
+### Added — Wave 2: N-version consensus wired into the pipeline (0.9.0)
+
+The consensus engine was built and unit-tested but inert — `Node.consensus`
+stayed `unanimous` even on disagreement. Wave 2 wires it, driven by a
+measurement of how the parsers actually disagree (so it records genuine
+conflicts without re-flooding the review queue).
+
+- **Text consensus (T6)** — `assemble._apply_text_consensus` runs
+  `consensus.reconcile_text` over the GENUINE text transcribers in each node's
+  `parsers`. Docling is deliberately excluded from the vote
+  (`consensus.GENUINE_TEXT_PARSERS = {pymupdf, mineru, surya}`): its authority
+  is structure, and the `node.text` it emits is reflow-derived (prepends clause
+  numbers, flattens the sub/superscripts PyMuPDF is the sole authority for,
+  follows its own reading order), so on the eval corpus it "disagrees" with
+  PyMuPDF on 42–92 nodes/doc — all artifacts, not value conflicts. Hard-voting
+  it would re-create the exact flood the gates exist to prevent. Docling's
+  candidate stays recorded in `parsers` for audit; with PyMuPDF-only the vote is
+  trivially unanimous, and consensus activates to real quarantine the moment a
+  genuine alternate transcriber (MinerU/Surya) populates `parsers` — verified by
+  test (a Surya `10 V/m` vs `1O V/m` on a Requirement quarantines).
+- **Three-parser table geometry (T7)** — `table_geometry.py` adds the Docling
+  (`docling_grid`, off the cells) and PyMuPDF (`pymupdf_grid`, word-bbox
+  clustering) opinions to join pdfplumber's; `assemble._apply_table_geometry_consensus`
+  quarantines a table whose grid the parsers don't agree on. Same
+  measurement-driven calibration: Docling (layout) and pdfplumber (ruling lines)
+  agree on n_rows/n_cols on **all 7 clean DNVGL tables** and disagree only on
+  genuinely ambiguous ones, so they are the genuine voters; PyMuPDF word
+  clustering counts each wrapped line of a multi-line cell as a row (a 14-row
+  table reads as 52), so it is an approximate corroborator, never a hard voter.
+  Result on the eval corpus: DNVGL 0 table quarantines (clean), TL **6** (3
+  borderless that pdfplumber can't see + 3 real Docling-vs-pdfplumber geometry
+  disagreements) — all spec-correct merged-cell-collapse guards. A genuine third
+  table-structure parser (Camelot / second layout model) is the deferred swap-in
+  to reach true three-way.
+- **Parameter richness (T8)** — `parameters.parse_parameters` now emits the
+  full `Parameter` sub-schema (canonical-model.md): **asymmetric** tolerances
+  ("10 +0.5/-0.2 V/m"), **relative** tolerances ("± 5 %"), and **range**
+  parameters ("10 - 15 V/m" → `comparator="range"`, `range=(lo, hi)`). Decimal
+  parsing is now **language-aware** (`_to_decimal(surface, lang)`): a decimal
+  comma is resolved from the document language instead of an unconditional
+  `","→"."` that silently turned the EN thousands value `1,500` into `1.5`; a
+  comma-number in a point-decimal / unknown locale is flagged
+  `review_required` + `ambiguous_decimal_locale` rather than guessed
+  (verification-rules.md "quarantine when document language is ambiguous").
+- **Review-queue visibility** — `eval_metrics.DocMetrics` gains
+  `consensus_quarantined`/`consensus_majority`: the gate-outcome count alone
+  misses the geometry quarantines (which set `node.consensus` directly), so the
+  benchmark now reports the true review-queue size (TL 18, DNVGL 23, DIN 21 on
+  the eval corpus, incl. table-geometry disagreements).
+
+### Changed — Wave 1 accuracy fixes (eval-driven, pipeline 0.8.2)
+
+Driven by the 3-doc eval report + a gap analysis against the updated
+`grc-doc-ingestion` skill/references. All reuse-and-extend, no new deps.
+
+- **Parameter precision (T1)** — `parameters._cell_parameter` no longer promotes
+  every numeric table cell to a `Parameter`. A cell becomes a Parameter only in
+  a **limit context** (a comparator symbol in the cell, or a limit keyword —
+  `limit`/`grenzwert`/`max`/`min`/… — in the column header) and with a resolved
+  unit. This kills the largest quarantine driver: a 69-cell *conditions* table
+  (frequency / forward power) previously emitted 21 comparator-less "value"
+  params that flooded the units gate; now 0. `canon_units._HEADER_UNIT` also
+  parses prose-form column units ("Frequenz **in MHz**"), not just parenthesized
+  `(dBµV/m)`. Corpus params dropped from over-extraction while genuine limit
+  columns are retained.
+- **Definition-clause nesting + labeling (T2/T3)** —
+  `topology.nest_by_clause` now nests clause-labeled `paragraph`/`list_item`
+  nodes (a DIN Terms-&-Definitions entry "3.24 Angleichung" is often typed a
+  paragraph), and `assign_clause_ids` no longer counts a trailing parenthetical
+  gloss against the short-title bar, so "3.28 Anstieg des Spektrums (siehe auch
+  Bild 1)" (7 words with the gloss, 4 without) gets its clause_id. Heading
+  recall 0.945 → 0.955.
+- **Numbering-gate honesty (T2)** — `gates/numbering.py` now filters a reported
+  gap against a **whole-document clause inventory**: a clause that is present
+  but merely mis-nested (Docling buries a definition paragraph under the
+  previous clause) is not a *drop* and is no longer flagged. The DIN doc's three
+  numbering findings — two of which were false ("expected 3.24", "expected
+  3.28", both present) — become two **genuine** drop reports naming the truly
+  absent clauses (`['3.25']`, `['3.33','3.34','3.35','3.36']`).
+- **Continuation gate (T4)** — `gates/continuation.py` compares header
+  signatures with `continuity._norm` (NFC + casefold + whitespace, matching the
+  upstream stitcher instead of being stricter than it) and runs the
+  partial-match quarantine only on real `is_column_header` cells, not the row-0
+  fallback. Removes the DNVGL false "partial header match (50%)" quarantines on
+  two data-row fragments Docling split on one page.
+- **Net:** gate quarantines 71 → 61 across the 3-doc corpus, and the survivors
+  are now genuine (real missing-comparator limits, real dropped clauses, real
+  unresolved xrefs) rather than false-parameter noise.
+
+Deferred (recorded, not silently dropped): the *structural* hoist of clause
+nodes Docling buried (the tree still mis-nests 3.24 under 3.23 even though the
+gate no longer misreads it); recovery of genuinely-dropped definitions
+(3.25/3.33–3.36 — a Docling two-column reading-order drop, needs extract-level
+work); numeric-fidelity loss from superscript/subscript reflow in prose (DIN
+0.839 — the runs/inline-math accuracy path). These map to Wave 2/3.
+
+### Added — combined benchmark/accuracy/verify_extraction report (`app/cli/eval_report.py`)
+
+One report over the same randomly sampled documents, instead of three tools
+that each did their own random draw:
+
+- `eval_metrics.DocMetrics` extended with the Phase 1-6 signal it previously
+  couldn't see: `gates_quarantined`/`gates_repaired`/`gates_by_gate` (copied
+  from `pipeline_provenance["gates"]`), `cdm_type_counts`, `parameters_total`,
+  `runs_coverage`.
+- `ArtifactStore.edition_path(key)` -- public accessor for a cached edition's
+  on-disk path (was previously private-only), so a caller can point a
+  subprocess at it.
+- `app/cli/eval_report.py` (+ `scripts/eval_report.sh`): draws N random PDFs
+  once, and for each runs the structural benchmark, the factual-accuracy
+  scorecard (`accuracy_check.check_document`), and `scripts/verify_extraction.py`
+  as an actual subprocess against the SAME cached `CanonicalEdition` --
+  `assemble()` runs exactly once per document. Writes a timestamped JSON+
+  Markdown report to `data/eval-reports/` and overwrites the committed
+  `docs/EVAL_REPORT.md`.
+- Verified on 3 real sampled standards (DIN EN 60068-2-64, DNVGL-CG-0339,
+  TL 81000): the gate-quarantine count embedded by `assemble()` and the count
+  from re-running `verify_extraction.py` standalone over the persisted
+  edition matched exactly on all 3 docs (19/19, 29/29, 23/23) -- confirms the
+  gates are deterministic, not order- or cache-dependent. Standalone
+  `accuracy_check.py --doc` on one sampled file reproduced the combined
+  report's numbers exactly.
+
+### Added — N-version consensus re-architecture (CDM v2 · runs · gates · typing)
+
+Re-architecture toward the `grc-doc-ingestion` spec (`docs/references/*`):
+extraction as an N-version consensus engine with per-character `runs`, a closed
+normative type set, `Decimal` `Parameter`s, and eight deterministic admission
+gates. Incremental — additive to the existing Docling pipeline, all prior tests
+still green. Pipeline version → **0.8.0**, schema → **2.0**.
+
+- **CDM v2** (`canonical_schema.py`): `Run` (font/size/`baseline_offset`/
+  `vertical_align`/bbox) + `reconstruct_raw_text` emitting Unicode super/
+  subscript codepoints; `Parameter` (`Decimal` value — never float — required
+  `comparator` gte/lte/eq/range, `Tolerance`, `condition`, `quantity_kind`),
+  superseding `Quantity`; closed `CDMType` literal + `_NORMATIVE_CDM_TYPES`;
+  `consensus` state, `parsers` candidate dict, `quarantine_reason`, `repairs`,
+  table `header_rows`/`continues_from`/`continues_to`, equation `mathml`/
+  `symbol_table`/`computes_limit`. All new fields optional — old nodes stay
+  trivially `unanimous`, un-quarantined.
+- **PyMuPDF runs extractor** (`app/pipeline/runs.py`): `rawdict` per-span
+  font/baseline → `vertical_align`, reading-order clustering by baseline so a
+  subscript sorts *within* its line (`H₂O`, not `HO₂`). The sole layer that can
+  catch `10⁻³ V/m` flattening to `10-3` (which parses as 7). Back-filled into
+  every text node in `assemble` by bbox intersection; PyMuPDF is the raw-text
+  authority, so `raw_text` is reconstructed *from* the runs and Docling's
+  transcription is kept as a `parsers` corroborator candidate.
+- **Consensus engine** (`app/pipeline/consensus.py`) + **pdfplumber third
+  table opinion** (`extract_pdfplumber.py`): the exact disagreement branch from
+  `parser-consensus.md` (unanimous / majority / quarantined; normative objects
+  require unanimity; authority-isolated → quarantine; never longest-string /
+  most-alnum / LLM / merge). Tables require **all three** geometry parsers to
+  agree on `n_rows`/`n_cols`/span-map or the table quarantines. NFKC+whitespace
+  +dash-fold normalization that deliberately preserves case, `±`, `≤`, `°`, `µ`,
+  confusables, and super/subscript. Surya 0.95 confidence ceiling.
+- **Eight verification gates** (`app/pipeline/gates/`) in spec order — header/
+  footer suppression → run-integrity → numbering monotonicity → table
+  rectangularity → continuation stitching → modal-verb preservation → unit/
+  tolerance integrity → equation integrity → cross-reference resolution — each
+  `pass | repair(+auditable repairs entry) | quarantine`. Repair only when
+  uniquely determined (a byte-identical running header injected mid-body);
+  quarantine otherwise (a numbering gap is never guessed). Wired into `assemble`
+  after `xref`; the review queue is summarized in `pipeline_provenance.gates`.
+- **`scripts/verify_extraction.py`** rewritten to run the gate package over a
+  real `CanonicalEdition` JSON: exit 0 clean, 1 quarantined, 2 doc-level alarm
+  (unresolved internal cross-reference). A CI admission gate, not a scorecard —
+  injecting a flattened-superscript corruption makes it exit non-zero.
+- **Normative typing** (`classify_type.py`) + **modality lexicon**
+  (`modality.py`): per-language modal set (EN/DE/FR — `il convient de` == should,
+  never inferred by translating to English) → closed CDM type, admonition
+  outranks modal, `shall` outranks `may`. **Parameter extraction**
+  (`parameters.py`): prose and cell limits → `Decimal` Parameters with
+  symbol/phrase comparators, `±` tolerance, frequency-band condition, and a
+  unit→`quantity_kind` vocabulary. Missing comparator is left unset so the
+  units gate quarantines it — never defaulted to `eq`.
+- **Deferred but registered swap-ins** (documented in the authority matrix, not
+  silently dropped): MinerU (equations, GPU/AGPL) and Surya 2 (scanned OCR, GPU,
+  conditional-commercial weights) — Docling formula-enrichment + RapidOCR fill
+  those lanes today; the DOCX lane (python-docx / OMML / revision marks). LTS
+  dependency pins with upper bounds landed in `pyproject.toml` so extraction
+  output stays reproducible across the content-address contract.
+
 ### Added — clause reunification + honest scorecard (heading-recall accuracy)
 - **Reunite two-column split clauses** (`topology.merge_split_clause_numbers`,
   wired into `assemble` before `assign_clause_ids`). ISO/DIN definition lists

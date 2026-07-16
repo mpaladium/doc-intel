@@ -62,6 +62,20 @@ _NUMBERED_TITLE = re.compile(r"^\s*(\d{1,3}(?:\.\d{1,3})+)\s+\D")
 _TITLE_MAX_WORDS = 12       # a clause title is short (list_item / merge target)
 _PARA_TITLE_MAX_WORDS = 6   # a bare paragraph is stricter: a definition term, not prose
 
+# A trailing parenthetical annotation on a definition entry -- "(en: effective
+# frequency range)", "(siehe auch Bild 1)". Standards definition lists write
+# terms as "N.N term (gloss)"; the gloss shouldn't count against the short-title
+# bar, or a genuine definition term gets left unlabeled (DIN 3.28 "Anstieg des
+# Spektrums (siehe auch Bild 1)" is 7 words with the gloss, 4 without).
+_TRAILING_PAREN = re.compile(r"\s*\([^)]*\)\s*$")
+
+
+def _title_word_count(text: str) -> int:
+    stripped = text
+    while (nxt := _TRAILING_PAREN.sub("", stripped)) != stripped:
+        stripped = nxt
+    return len(stripped.split())
+
 
 def _iter_reading_order(nodes: list[Node]):
     for n in nodes:
@@ -142,7 +156,7 @@ def assign_clause_ids(node: Node) -> Node:
             # A list_item is already a title by Docling's typing; a bare
             # paragraph is held to a much shorter length (a definition term).
             max_words = _TITLE_MAX_WORDS if node.type == "list_item" else _PARA_TITLE_MAX_WORDS
-            if _NUMBERED_TITLE.match(node.text) and len(node.text.split()) <= max_words:
+            if _NUMBERED_TITLE.match(node.text) and _title_word_count(node.text) <= max_words:
                 clause_id = _LEADING_NUMERIC.match(node.text.strip())
                 clause_id = clause_id.group(1) if clause_id else None
         if clause_id is not None:
@@ -190,7 +204,13 @@ def nest_by_clause(top_sections: list[Node]) -> list[Node]:
         (stack[-1].subs if stack else forest).append(entry)
 
     for node in top_sections:
-        parts = _numeric_parts(node.clause_id) if node.type == "section" else None
+        # Any clause-labeled node participates in the numeric hierarchy, not just
+        # `section` -- a Terms-&-Definitions entry is often a `paragraph`/
+        # `list_item` ("3.24 Angleichung"), and if it doesn't get placed as a
+        # numeric sibling it gets buried under the previous clause (3.23),
+        # creating a phantom gap the numbering gate then flags. `assign_clause_ids`
+        # already labels these node types, so honor the label here too.
+        parts = _numeric_parts(node.clause_id)
         is_annex = node.type == "section" and node.clause_id and parts is None \
             and node.clause_id.lower().startswith("annex")
 

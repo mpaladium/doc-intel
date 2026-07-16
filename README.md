@@ -222,9 +222,9 @@ ingestion-engine ready: device=AcceleratorDevice.AUTO num_threads=8 max_concurre
 ## Pipeline
 
 `quarantine -> triage -> route -> extract(Docling, OCR auto-routed) ->
-caption_attach -> lattice -> topology -> continuity -> canon.units ->
-canon.equation -> lang -> classify.section_role -> nest_by_clause -> xref ->
-assemble`.
+caption_attach -> lattice -> topology -> continuity -> runs backfill ->
+canon.units -> canon.equation -> lang -> classify_type -> parameters ->
+classify.section_role -> nest_by_clause -> xref -> gates -> assemble`.
 
 - `triage` measures each page's text-layer quality
   (`DIGITAL_CLEAN`/`DIGITAL_DIRTY`/`SCANNED`/`UNCERTAIN`, PyMuPDF stats) and
@@ -261,6 +261,51 @@ assemble`.
   dBµV/m). `xref` records cross-references ("see 4.2.3", "Table 22",
   "Anhang ZA") on `Node.xrefs`, resolving clause/annex targets within the
   edition.
+- **runs backfill** (`app/pipeline/runs.py`) attaches PyMuPDF per-character
+  `runs` (font/size/baseline → `vertical_align`) to every text node by bbox
+  intersection. PyMuPDF is the raw-text authority, so `raw_text` is
+  reconstructed *from* the runs (byte-exact, keeps the en-dash / `±` /
+  superscript the content stream actually has); Docling's transcription is
+  recorded as a `parsers` corroborator candidate. This is the only layer that
+  can catch `10⁻³ V/m` flattening to `10-3` (which parses as 7).
+- `classify_type` assigns the closed **normative CDM type** (`Requirement`/
+  `Recommendation`/`Permission`/`Warning`/`Scope`/…) from a per-language modal
+  lexicon (`modality.py`; `il convient de` == *should*, never inferred by
+  translating to English). `parameters` extracts compliance-grade `Parameter`s
+  (`Decimal` value, comparator, `±` tolerance, frequency-band condition,
+  `quantity_kind`) from prose and cells; a missing comparator is left unset so
+  the units gate quarantines it rather than defaulting to `eq`.
+- **`gates`** runs the eight deterministic admission gates
+  (`app/pipeline/gates/`, spec order: header/footer → run-integrity →
+  numbering → table-rectangularity → continuation → modal-verb → unit/tolerance
+  → equation → cross-reference). Each is `pass | repair | quarantine`: a repair
+  writes an auditable `Node.repairs` entry and fires only when the fix is
+  uniquely determined; everything else quarantines (`consensus="quarantined"` +
+  a reason) into a review queue. The queue is summarized in
+  `pipeline_provenance.gates`. Extraction never guesses, repairs silently, or
+  discards — disagreement is recorded, not resolved.
+
+Run the gates as a CI admission check over a saved edition:
+
+```bash
+uv run python scripts/verify_extraction.py edition.json   # 0 clean · 1 quarantined · 2 doc-level alarm
+```
+
+### Parser authority & deferred engines
+
+Text/`runs`/`±`/superscript authority is **PyMuPDF**; section-tree and table
+geometry authority is **Docling**; a third independent table-geometry opinion
+comes from **pdfplumber** (ruling lines) — a table's grid needs all three to
+agree or it quarantines. Two authorities remain **registered-but-deferred**
+swap-ins (heavy/GPU, honored in the architecture without pulling GPU-only deps
+into the offline Mac build): **MinerU** for equations and **Surya 2** for
+scanned OCR — Docling formula-enrichment and RapidOCR fill those lanes today,
+with Surya's 0.95 OCR confidence ceiling already enforced in `consensus.py`.
+The DOCX lane (python-docx / OMML / revision marks) shares the CDM + gates and
+is a later phase. Licensing posture: PyMuPDF & MinerU are AGPL imports and
+Surya weights are conditional-commercial — an offline build with no runtime
+network egress, gated by a licensing allowlist before any deferred engine is
+enabled.
 
 ## Evaluating extraction on real documents
 
@@ -289,10 +334,17 @@ app/
   cli/evaluate_dir.py      batch-processes every PDF under a directory (no server needed)
   cli/evaluate_samples.py  random-sampling quality-eval harness (+ eval_metrics.py)
   pipeline/                quarantine -> triage -> route -> extract(Docling) -> lattice
-                            -> topology -> continuity -> canon_equation -> lang
-                            -> classify.section_role -> assemble
+                            -> topology -> continuity -> runs -> canon_units
+                            -> canon_equation -> lang -> classify_type -> parameters
+                            -> classify.section_role -> xref -> gates -> assemble
                             run.py: process_pdf() -- the one pipeline entrypoint the API
                             and the batch CLI both call
+                            runs.py (PyMuPDF per-char runs / super-subscript authority),
+                            consensus.py (N-version disagreement engine),
+                            extract_pdfplumber.py (3rd table-geometry opinion),
+                            classify_type.py + modality.py (closed CDM type),
+                            parameters.py (Decimal Parameter extraction),
+                            gates/ (8 deterministic admission gates),
                             canon_equation.py (LaTeX/mhchem normalization),
                             lang.py (NFC + per-node language)
   store/                   artifact_store.py (content-addressed filesystem store)
@@ -302,7 +354,8 @@ app/
   config/ownership.yaml    OWNERSHIP priority table (extractor per content-type/page-class)
 canonical_schema.py        shared contract with comparison-engine (Goal 2, not in this repo yet)
 rulepacks/section_roles.yaml   multilingual front-matter dictionary (confidence booster only)
-scripts/                   start_ingestion.sh, start_ui.sh, evaluate_dir.sh, eval_samples.sh
+scripts/                   start_ingestion.sh, start_ui.sh, evaluate_dir.sh, eval_samples.sh,
+                            verify_extraction.py (run the 8 gates as a CI admission check)
 tests/                     pytest suite + tests/fixtures/make_test_pdf.py (synthetic standard)
 ```
 
@@ -323,9 +376,16 @@ the document picker and batch evaluator.
 
 ## Deferred (tracked, not forgotten)
 
-See `../docs/ARCHITECTURE.md` §6/§7: OCR (Surya), equation extraction
-(MinerU), the full Redis GPU lease, `comparison-engine` (Neo4j/Qdrant),
-the `docker-compose.yml` deployment, and IEC/CISPR-specific clause-topology
-rulepacks (need real standards documents as gold-set input).
+See `../docs/references/parser-consensus.md` and `../docs/ARCHITECTURE.md`
+§6/§7. Registered-but-deferred consensus **engines** (swapped into the authority
+matrix without a call-site rewrite): **MinerU** equations and **Surya 2**
+scanned OCR (heavy/GPU; Docling formula-enrichment + RapidOCR fill them today),
+and the **DOCX lane** (python-docx / OMML / revision marks, shares CDM + gates).
+Also deferred: the full text-consensus wiring across all parsers (the engine +
+gates are built and unit-tested; only PyMuPDF↔Docling text authority is wired
+into `assemble` so far), the licensing-allowlist CI gate, the full Redis GPU
+lease, `comparison-engine` (Neo4j/Qdrant), the `docker-compose.yml` deployment,
+and IEC/CISPR-specific clause-topology rulepacks (need real standards documents
+as gold-set input).
 
 See `CHANGELOG.md` for what's shipped so far.

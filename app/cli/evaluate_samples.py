@@ -98,6 +98,11 @@ def _print_summary(metrics: list[DocMetrics]) -> None:
               f"non_nfc={m.non_nfc_text_nodes}")
         print(f"  equations={m.equation_nodes} (with_latex={m.equation_nodes_with_latex})")
         print(f"  review_required={m.review_required} mean_conf={m.mean_confidence}")
+        print(f"  runs_coverage={m.runs_coverage} cdm_types={m.cdm_type_counts} "
+              f"parameters={m.parameters_total}")
+        print(f"  gates: quarantined={m.gates_quarantined} repaired={m.gates_repaired} "
+              f"by_gate={m.gates_by_gate}")
+        print(f"  consensus: quarantined={m.consensus_quarantined} majority={m.consensus_majority}")
 
 
 def run(docs_dir: Path, n: int, seed: int) -> list[DocMetrics]:

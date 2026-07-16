@@ -49,6 +49,24 @@ def test_assign_clause_ids_walks_tree():
     assert out.children[1].clause_id == "1"
 
 
+def test_definition_paragraph_with_gloss_gets_clause_id():
+    # DIN 3.28 term is 7 words incl. its "(siehe auch Bild 1)" gloss, but only 4
+    # without -- the parenthetical must not push it over the short-title bar
+    p = Node(id="p1", type="paragraph", clause_id=None,
+             text="3.28 Anstieg des Spektrums (siehe auch Bild 1)", provenance=_prov())
+    out = topology.assign_clause_ids(p)
+    assert out.clause_id == "3.28"
+
+
+def test_prose_paragraph_starting_with_number_still_not_labeled():
+    # guard intact: a prose paragraph with no parenthetical stays unlabeled
+    p = Node(id="p2", type="paragraph", clause_id=None,
+             text="3.2 m/s applies across the whole tested frequency range here",
+             provenance=_prov())
+    out = topology.assign_clause_ids(p)
+    assert out.clause_id is None
+
+
 # --------------------------------------------------------------------------- #
 # clause-hierarchy reconstruction
 # --------------------------------------------------------------------------- #
@@ -111,6 +129,30 @@ def test_annex_resets_to_top_level():
     nested = topology.nest_by_clause(flat)
     top = [n.clause_id for n in nested if n.type == "section"]
     assert "Annex A" in top  # not buried under 5.3
+
+
+def _para(text, clause_id=None):
+    return Node(id=f"p{id(text)}", type="paragraph", text=text, clause_id=clause_id,
+                children=[], provenance=_prov())
+
+
+def test_definition_paragraph_nests_as_sibling_not_child():
+    # DIN Terms-&-Definitions: 3.24 arrives typed `paragraph` between sections
+    # 3.23 and 3.27. It must become a SIBLING under 3 (so the numbering gate
+    # sees 3.23 -> 3.24 -> 3.27), not a child buried under 3.23.
+    flat = [_clause("3"), _clause("3.23"), _para("3.24 Angleichung", clause_id="3.24"),
+            _clause("3.27")]
+    nested = topology.nest_by_clause(flat)
+    # collect every clause_id and its depth across all node types
+    def walk(nodes, d=0):
+        for n in nodes:
+            yield n.clause_id, d
+            yield from walk(n.children, d + 1)
+    depths = {cid: d for cid, d in walk(nested) if cid}
+    assert depths["3.23"] == depths["3.24"] == depths["3.27"] == 1  # all siblings under 3
+    # and 3.24 is NOT a child of 3.23
+    c323 = next(n for n in nested[0].children if n.clause_id == "3.23")
+    assert all(ch.clause_id != "3.24" for ch in c323.children)
 
 
 # --------------------------------------------------------------------------- #

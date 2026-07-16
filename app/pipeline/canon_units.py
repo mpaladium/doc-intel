@@ -51,8 +51,12 @@ _QUANTITY = re.compile(
     rf"(?P<cond>\([^)]+\)|(?:at|bei|@)\s+\S.*)?\s*$",
     re.IGNORECASE,
 )
-# A unit sitting in a column header, e.g. "Limit (dBµV/m)" -> the column's unit.
-_HEADER_UNIT = re.compile(rf"\((?P<unit>{_UNIT_ALT})\)", re.IGNORECASE)
+# A unit sitting in a column header, either parenthesized ("Limit (dBµV/m)") or
+# in prose form ("Frequenz in MHz", "P vor in W") -- both are common in EMC
+# tables. `\bin\b` won't fire inside "min"/"within" (word boundary is before the
+# preceding letter), so it stays a genuine "in <unit>" match.
+_HEADER_UNIT = re.compile(
+    rf"\((?P<u_paren>{_UNIT_ALT})\)|\bin\s+(?P<u_prose>{_UNIT_ALT})\b", re.IGNORECASE)
 
 
 def _normalize_unit(raw: str | None) -> str | None:
@@ -64,7 +68,7 @@ def _normalize_unit(raw: str | None) -> str | None:
 def _unit_from_header_path(header_path: list[str]) -> str | None:
     for h in reversed(header_path):  # nearest (deepest) header first
         if m := _HEADER_UNIT.search(h):
-            return _normalize_unit(m.group("unit"))
+            return _normalize_unit(m.group("u_paren") or m.group("u_prose"))
     return None
 
 

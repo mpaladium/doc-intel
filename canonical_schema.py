@@ -22,6 +22,7 @@ Design notes:
 
 from __future__ import annotations
 
+from decimal import Decimal
 from enum import Enum
 from typing import Literal, Optional
 
@@ -34,21 +35,97 @@ from pydantic import BaseModel, Field
 class Provenance(BaseModel):
     page: int
     bbox: tuple[float, float, float, float]
-    parser: str                      # "docling" | "mineru" | "surya" | "digital_layer"
+    parser: str                      # "docling" | "mineru" | "surya" | "digital_layer" | "pymupdf"
     model_version: str
     confidence: float = Field(ge=0.0, le=1.0)
 
 
+VerticalAlign = Literal["normal", "superscript", "subscript"]
+
+
+class Run(BaseModel):
+    """A single formatting run (docs/references/canonical-model.md §Text runs).
+    `raw_text` is a lossy projection that cannot audit itself: '10⁻³ V/m'
+    flattens to '10-3 V/m' *before the string exists*, so any check written
+    against raw_text interrogates a witness that already forgot. Font/baseline
+    metadata is the only layer that can catch it, and PyMuPDF exposes it per
+    character where nothing else in the stack does. Never merge adjacent runs
+    with different `vertical_align`, `size`, or `font` -- that merge is exactly
+    the operation that destroys the signal."""
+    text: str
+    font: str
+    size: float
+    baseline_offset: float = 0.0             # negative=subscript, positive=superscript
+    bold: bool = False
+    italic: bool = False
+    vertical_align: VerticalAlign = "normal"
+    bbox: Optional[tuple[float, float, float, float]] = None
+
+
+# Unicode super/subscript maps for reconstructing raw_text from runs (the
+# reconstruction the run-integrity gate checks). Only digits + a few operators
+# have codepoints; anything without one falls back to the baseline glyph.
+_SUPERSCRIPT = str.maketrans("0123456789+-=()n", "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁼⁽⁾ⁿ")
+_SUBSCRIPT = str.maketrans("0123456789+-=()", "₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎")
+
+
+def reconstruct_raw_text(runs: list[Run]) -> str:
+    """Concatenate run text, emitting the Unicode super/subscript codepoint
+    wherever a run is not on the baseline. This is what makes the units gate
+    meaningful instead of decorative -- if this doesn't equal the stored
+    raw_text, one of the two is lying and the object is quarantined."""
+    out: list[str] = []
+    for r in runs:
+        if r.vertical_align == "superscript":
+            out.append(r.text.translate(_SUPERSCRIPT))
+        elif r.vertical_align == "subscript":
+            out.append(r.text.translate(_SUBSCRIPT))
+        else:
+            out.append(r.text)
+    return "".join(out)
+
+
 class Quantity(BaseModel):
-    """A compliance value parsed out of a table cell (canon.units, SKILLS.md).
-    `value` keeps the surface form (range/comparator preserved: "30-230",
-    "<=40", "0.5") so nothing is lost; `unit` is normalized for comparison
-    (dBuV/m -> dBµV/m, m/s2 -> m/s^2); `condition` captures an inline qualifier
-    ("at 3 m", "peak"). This is the value-level signal comparison-engine needs
-    to see a limit tighten (e.g. 40 -> 30 dBµV/m)."""
+    """DEPRECATED in favor of `Parameter` (CDM v2). Retained so existing
+    canon.units output stays valid during migration. A cell's surface value;
+    `Parameter` is the richer, comparison-grade replacement (Decimal value,
+    comparator, tolerance)."""
     value: str
     unit: Optional[str] = None
     condition: Optional[str] = None
+
+
+# --------------------------------------------------------------------------- #
+# Parameter -- the highest-value extraction (canonical-model.md §Parameter).
+# Most consequential compliance changes are a number moving.
+# --------------------------------------------------------------------------- #
+Comparator = Literal["gte", "lte", "eq", "range"]
+ToleranceType = Literal["symmetric", "asymmetric", "relative"]
+
+
+class Tolerance(BaseModel):
+    type: ToleranceType
+    value: Decimal
+    value_upper: Optional[Decimal] = None    # for asymmetric tolerances
+    unit: Optional[str] = None
+
+
+class Parameter(BaseModel):
+    """A compliance value: `Decimal` never float (a limit is not a place for
+    binary rounding), a required comparator (missing → quarantine, never
+    default `eq`: "shall be 10 V/m" and "at least 10 V/m" differ), and its
+    condition (a limit is meaningless without its frequency band)."""
+    name: str
+    quantity_kind: Optional[str] = None      # controlled vocab, e.g. "electric_field"
+    value: Optional[Decimal] = None          # None only for a pure-range parameter
+    unit: Optional[str] = None               # canonical; raw string kept on parent object
+    raw_unit: Optional[str] = None
+    tolerance: Optional[Tolerance] = None
+    comparator: Optional[Comparator] = None  # missing → the parameter is quarantined
+    range: Optional[tuple[Decimal, Decimal]] = None
+    condition: Optional[str] = None          # e.g. "80 MHz - 1 GHz"
+    source_object_id: Optional[str] = None
+    bbox: Optional[tuple[float, float, float, float]] = None
 
 
 class Cell(BaseModel):
@@ -60,6 +137,11 @@ class Cell(BaseModel):
     is_column_header: bool = False   # from the extractor's own header detection; drives
                                      # multi-row header_path lineage (continuity.header_path)
     text: str
+    # Every parser's candidate for this cell's text (parser-consensus.md: a
+    # merged-cell collapse in a limit table is the single most expensive silent
+    # error, so table geometry requires all three parsers to agree). Empty for
+    # single-parser cells.
+    parsers: dict[str, Optional[str]] = Field(default_factory=dict)
     # Cell-level provenance (ARCHITECTURE.md §1.9). A table is the one element
     # whose sub-parts can span pages: continuity.stitch merges a continuation
     # table onto the previous page's node, so the node's single provenance.page
@@ -83,6 +165,29 @@ NodeType = Literal[
 # field, consistent with how this schema avoids redundant cross-references
 # elsewhere (e.g. Cell.header_path names columns rather than pointing at a
 # header Cell by id).
+#
+# `NodeType` above is the STRUCTURAL type (what the extraction tree is made of).
+# `CDMType` below is the closed normative-role type set from
+# canonical-model.md -- assigned by classify_type on top of the structural
+# type (a "paragraph" carrying a `shall` becomes cdm_type "Requirement"). The
+# set is closed on purpose: content that doesn't fit is a Paragraph with a role
+# annotation, never a new ad-hoc type.
+CDMType = Literal[
+    "Document", "Section", "Paragraph", "Requirement", "Recommendation",
+    "Permission", "Procedure", "Step", "AcceptanceCriteria", "Table", "Figure",
+    "Equation", "Note", "Warning", "Reference", "NormativeReference",
+    "Definition", "Scope", "Exception",
+]
+
+# Which CDM types are normative (parser-consensus.md: normative objects require
+# UNANIMITY -- a wording dissent on a limit is stop-the-line, on a note is
+# tolerable). An object also counts as normative if it carries any Parameter.
+_NORMATIVE_CDM_TYPES = frozenset({
+    "Requirement", "Warning", "AcceptanceCriteria", "Exception", "Scope",
+    "Procedure", "Step", "NormativeReference",
+})
+
+ConsensusState = Literal["unanimous", "majority", "quarantined"]
 
 SectionRole = Literal[
     "normative",          # body content: requirements, tables, definitions, normative annexes
@@ -122,18 +227,51 @@ class XRef(BaseModel):
 
 class Node(BaseModel):
     id: str                          # stable WITHIN an edition
-    type: NodeType
+    type: NodeType                   # STRUCTURAL type
+    cdm_type: Optional[CDMType] = None  # normative-role type (classify_type); None until assigned
     clause_id: Optional[str] = None  # normalized "4.2.3.1" / "Annex ZA"
-    lang: Optional[str] = None       # BCP-47
-    text: Optional[str] = None       # NFC-normalized
-    latex: Optional[str] = None      # canonicalized
+    lang: Optional[str] = None       # BCP-47, detected per object not per document
+    translation_group_id: Optional[str] = None  # links DE/EN instances of the same object
+    # `text` is what the pipeline reads (NFC-normalized). `raw_text` is the
+    # IMMUTABLE byte-exact string from the authoritative parser (== text on the
+    # single-parser path); `normalized_text` is the additive comparison form.
+    # `runs` is REQUIRED for a real audit -- raw_text alone is lossy (a check
+    # against it interrogates a witness that already forgot the superscript).
+    text: Optional[str] = None
+    raw_text: Optional[str] = None
+    normalized_text: Optional[str] = None
+    runs: list[Run] = Field(default_factory=list)
+    latex: Optional[str] = None      # canonicalized (Equation nodes)
     cells: Optional[list[Cell]] = None
+    parameters: list[Parameter] = Field(default_factory=list)  # compliance values
     xrefs: list[XRef] = Field(default_factory=list)  # cross-references in this node's text
     children: list["Node"] = Field(default_factory=list)
     provenance: Provenance
+
+    # -- N-version consensus (parser-consensus.md). Single-parser output is
+    # trivially "unanimous"; the consensus engine sets these when >1 parser
+    # produced a candidate. `parsers` keeps EVERY candidate incl. the losers so
+    # "why does the report say 10 V/m" is answerable three years later.
+    parsers: dict[str, Optional[str]] = Field(default_factory=dict)
+    consensus: ConsensusState = "unanimous"
+    quarantine_reason: Optional[str] = None
+
+    # -- Table-specific (only meaningful when type == "table") --
+    header_rows: Optional[int] = None
+    continues_from: Optional[str] = None   # multi-page stitching, prev fragment id
+    continues_to: Optional[str] = None
+    row_scopes: list[str] = Field(default_factory=list)  # one embedding target per row-scope
+
+    # -- Equation-specific (only meaningful when type == "equation") --
+    mathml: Optional[str] = None
+    rendered_text: Optional[str] = None    # what a flattening parser produced -- diagnosis only
+    defines: Optional[str] = None          # LHS symbol, e.g. "E"
+    symbol_table: dict = Field(default_factory=dict)  # {sym: {quantity_kind, unit}}
+    computes_limit: bool = False           # does a Requirement's parameter depend on this?
+
     review_required: bool = False    # true if ANY reason below applies
-    review_reasons: list[str] = Field(default_factory=list)  # e.g. "low_extraction_confidence",
-                                      # "ambiguous_section_role"
+    review_reasons: list[str] = Field(default_factory=list)  # e.g. "low_extraction_confidence"
+    repairs: list[dict] = Field(default_factory=list)  # gate repairs (auditable or it's corruption)
 
     # Section-role classification (see section_role_classifier.py). Defaults are the
     # SAFE defaults: every node is normative and compliance-relevant until a classifier
@@ -144,6 +282,27 @@ class Node(BaseModel):
 
 
 Node.model_rebuild()
+
+
+def is_normative(node: Node) -> bool:
+    """A node is normative if its CDM type is in the normative set OR it carries
+    any Parameter (parser-consensus.md: any object carrying a Parameter requires
+    unanimity). Normative objects that aren't unanimous are quarantined."""
+    return (node.cdm_type in _NORMATIVE_CDM_TYPES) or bool(node.parameters)
+
+
+def make_object_id(doc_id: str, section_path: Optional[list[str]], raw_text: Optional[str],
+                   standard_id: Optional[str] = None) -> str:
+    """Identity scheme (canonical-model.md §Identity): section-path IDs are
+    stable across editions when numbering is stable (what makes ID-first
+    alignment cheap); unnumbered content falls back to a content hash."""
+    import hashlib
+
+    if section_path:
+        prefix = standard_id or doc_id
+        return f"{prefix}#{'.'.join(section_path)}"
+    digest = hashlib.sha256((raw_text or "").encode("utf-8")).hexdigest()[:12]
+    return f"{doc_id}#{digest}"
 
 
 def iter_chunkable_nodes(node: Node, _ancestor_relevant: bool = True):

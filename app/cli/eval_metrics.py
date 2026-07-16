@@ -57,6 +57,26 @@ class DocMetrics:
     # review
     review_required: int = 0
     mean_confidence: float = 0.0
+    # verification gates (Phase 4, verification-rules.md) -- copied from
+    # pipeline_provenance["gates"], which assemble() already populates by
+    # running app.pipeline.gates.run_all; nothing recomputed here.
+    gates_quarantined: int = 0
+    gates_repaired: int = 0
+    gates_by_gate: dict[str, dict[str, int]] = field(default_factory=dict)
+    # normative typing + Parameter extraction (Phase 5, canonical-model.md)
+    cdm_type_counts: dict[str, int] = field(default_factory=dict)
+    parameters_total: int = 0
+    # N-version consensus (parser-consensus.md): the TRUE review-queue size --
+    # every node whose consensus is quarantined, whether by a verification gate
+    # or by a pre-gate consensus step (text or table-geometry disagreement).
+    # gates_quarantined counts only gate outcomes and so misses the geometry
+    # quarantines, which set node.consensus directly.
+    consensus_quarantined: int = 0
+    consensus_majority: int = 0
+    # runs backfill (Phase 2/3) -- fraction of text nodes carrying PyMuPDF
+    # per-character runs (the super/subscript-± authority); low coverage on a
+    # born-digital doc is itself a signal the backfill isn't reaching content.
+    runs_coverage: float = 0.0
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -68,6 +88,7 @@ def compute_metrics(filename: str, edition: CanonicalEdition) -> DocMetrics:
     parent_type: dict[int, str] = {}  # id(node) -> parent node type
     confidences: list[float] = []
     langs: set[str] = set()
+    text_nodes_with_runs = 0
 
     for node, depth in _iter_nodes(edition.root):
         m.max_depth = max(m.max_depth, depth)
@@ -79,6 +100,14 @@ def compute_metrics(filename: str, edition: CanonicalEdition) -> DocMetrics:
             confidences.append(node.provenance.confidence)
         if node.review_required:
             m.review_required += 1
+
+        if node.cdm_type:
+            m.cdm_type_counts[node.cdm_type] = m.cdm_type_counts.get(node.cdm_type, 0) + 1
+        m.parameters_total += len(node.parameters)
+        if node.consensus == "quarantined":
+            m.consensus_quarantined += 1
+        elif node.consensus == "majority":
+            m.consensus_majority += 1
 
         if node.type == "list_item":
             m.list_items += 1
@@ -113,10 +142,13 @@ def compute_metrics(filename: str, edition: CanonicalEdition) -> DocMetrics:
                 langs.add(node.lang)
             if not _is_nfc(node.text):
                 m.non_nfc_text_nodes += 1
+            if node.runs:
+                text_nodes_with_runs += 1
 
     m.distinct_langs = sorted(langs)
     m.lang_primary = edition.lang_primary
     m.mean_confidence = round(sum(confidences) / len(confidences), 4) if confidences else 0.0
+    m.runs_coverage = round(text_nodes_with_runs / m.text_nodes, 4) if m.text_nodes else 0.0
 
     prov = edition.pipeline_provenance or {}
     page_classes = prov.get("page_classes", {})
@@ -125,5 +157,10 @@ def compute_metrics(filename: str, edition: CanonicalEdition) -> DocMetrics:
         m.page_class_counts[cls] = m.page_class_counts.get(cls, 0) + 1
     if m.pages:
         m.uncertain_rate = round(m.page_class_counts.get("UNCERTAIN", 0) / m.pages, 4)
+
+    gates = prov.get("gates", {})
+    m.gates_quarantined = gates.get("quarantined", 0)
+    m.gates_repaired = gates.get("repaired", 0)
+    m.gates_by_gate = gates.get("by_gate", {})
 
     return m

@@ -6,5 +6,5 @@ so bumping it is what forces re-processing instead of silently serving stale
 output from an old pipeline version.
 """
 
-PIPELINE_VERSION = "0.6.0"  # clause reunification (split two-column + numbered list_items), nested-table flag
-SCHEMA_VERSION = "1.0"
+PIPELINE_VERSION = "0.9.1"  # Wave 2: text + table-geometry consensus wired; Parameter richness (asymmetric/relative tolerance, range, language-aware decimals)
+SCHEMA_VERSION = "2.0"      # CDM v2 (docs/references/canonical-model.md)

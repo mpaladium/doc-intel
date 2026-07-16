@@ -61,6 +61,13 @@ class ArtifactStore:
             return None
         return CanonicalEdition.model_validate_json(path.read_text())
 
+    def edition_path(self, key: str) -> Path | None:
+        """The on-disk path of a cached edition.json, for callers (e.g.
+        scripts/verify_extraction.py) that need to point a subprocess at the
+        file rather than the in-memory object. None if not cached."""
+        path = self._edition_path(key)
+        return path if path.exists() else None
+
     def put_page_image(self, key: str, page_no: int, png_bytes: bytes) -> None:
         self._atomic_write(self._pages_dir(key) / f"{page_no}.png", png_bytes)
 

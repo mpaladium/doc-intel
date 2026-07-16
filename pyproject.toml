@@ -3,21 +3,25 @@ name = "ingestion-engine"
 version = "0.1.0"
 description = "Stateless PDF -> CanonicalEdition ingestion pipeline (Goal 1: high-accuracy document extraction)"
 requires-python = ">=3.13"
+# LTS/stable pins: lower bound = the validated stable release, upper bound =
+# the next minor/major so a surprise release can't silently change extraction
+# output (which would break the content-address contract). Bump deliberately.
 dependencies = [
-    "docling>=2.97",
-    "fastapi>=0.136",
-    "jinja2>=3.1.6",
-    "lingua-language-detector>=2.2.0",
-    "pydantic>=2",
-    "pymupdf>=1.28.0",
-    "python-multipart>=0.0.32",
-    "pyyaml>=6.0.3",
-    "uvicorn[standard]>=0.51.0",
+    "docling>=2.111,<3",
+    "fastapi>=0.139,<1",
+    "jinja2>=3.1.6,<4",
+    "lingua-language-detector>=2.2,<3",
+    "pdfplumber>=0.11.4,<0.12",
+    "pydantic>=2.13,<3",
+    "pymupdf>=1.28,<2",
+    "python-multipart>=0.0.32,<0.1",
+    "pyyaml>=6.0.3,<7",
+    "uvicorn[standard]>=0.51,<1",
 ]
 
 [dependency-groups]
 dev = [
-    "httpx>=0.28.1",
-    "pytest>=9.1.1",
-    "reportlab>=5.0.0",
+    "httpx>=0.28.1,<0.29",
+    "pytest>=9.1,<10",
+    "reportlab>=5.0,<6",
 ]

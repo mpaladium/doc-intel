@@ -36,6 +36,18 @@ def test_put_then_get_roundtrips(tmp_path):
     assert fetched.edition_id == key
 
 
+def test_edition_path_none_until_written_then_points_at_the_file(tmp_path):
+    store = ArtifactStore(tmp_path)
+    key = "somekey"
+    assert store.edition_path(key) is None
+
+    store.put_edition(key, _tiny_edition(key))
+    path = store.edition_path(key)
+    assert path is not None
+    assert path.name == "edition.json"
+    assert path.exists()
+
+
 def test_put_is_idempotent_second_write_is_a_noop_semantically(tmp_path):
     store = ArtifactStore(tmp_path)
     key = "somekey"
