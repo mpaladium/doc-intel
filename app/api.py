@@ -43,7 +43,6 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 
-from canonical_schema import Node
 from app.pipeline.extract_docling import get_converter
 from app.pipeline.run import process_pdf
 from app.store.artifact_store import ArtifactStore, compute_key
@@ -174,43 +173,13 @@ def get_page_image(key: str, page_no: int):
     return Response(content=path.read_bytes(), media_type="image/png")
 
 
-def _iter_all_nodes(node: Node):
-    yield node
-    for child in node.children:
-        yield from _iter_all_nodes(child)
-
-
 @app.get("/editions/{key}/ui", response_class=HTMLResponse)
-def inspector_ui(request: Request, key: str, page: int = 1):
-    edition = store.get_edition(key)
-    if edition is None:
+def inspector_ui(request: Request, key: str):
+    """The visual accuracy evaluator. This route only checks readiness and hands
+    the template the `key`; the page itself fetches `GET /editions/{key}` (the
+    full post-consensus CanonicalEdition JSON, incl. page_image_urls and
+    pipeline_provenance.page_sizes/raster_dpi) and renders the source<->canonical
+    linking, section map, and document graph entirely client-side."""
+    if store.get_edition(key) is None:
         raise HTTPException(status_code=202, detail="not ready")
-
-    page_sizes = edition.pipeline_provenance.get("page_sizes", {})
-    dpi = edition.pipeline_provenance.get("raster_dpi", 150)
-    scale = dpi / 72.0
-
-    all_nodes = [n for n in _iter_all_nodes(edition.root) if n.text or n.cells]
-    confidence_sorted = sorted(all_nodes, key=lambda n: n.provenance.confidence)
-
-    page_nodes = [n for n in all_nodes if n.provenance.page == page]
-    overlays = []
-    for n in page_nodes:
-        l, t, r, b = n.provenance.bbox
-        page_w, page_h = page_sizes.get(str(page), (612.0, 792.0))
-        overlays.append({
-            "id": n.id, "type": n.type, "confidence": n.provenance.confidence,
-            "section_role": n.section_role, "review_required": n.review_required,
-            "left": l * scale, "top": (page_h - t) * scale,
-            "width": (r - l) * scale, "height": (t - b) * scale,
-        })
-
-    page_numbers = store.list_page_numbers(key)
-
-    return templates.TemplateResponse(request, "inspector.html", {
-        "key": key,
-        "page": page,
-        "page_numbers": page_numbers,
-        "overlays": overlays,
-        "confidence_sorted": confidence_sorted[:200],
-    })
+    return templates.TemplateResponse(request, "inspector.html", {"key": key})

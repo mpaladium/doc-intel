@@ -3,7 +3,8 @@
 Stateless PDF → `CanonicalEdition` ingestion pipeline. This is Goal 1 of the
 two-service architecture in [`../docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md):
 turn one PDF into a high-accuracy, provenance-tracked document tree and let a
-human verify it through a confidence-sorted inspector — never a workflow queue.
+human verify it through a visual accuracy evaluator (source ↔ canonical, section
+map, document graph) — never a workflow queue.
 
 Current scope (see `../docs/ARCHITECTURE.md` §7 build order, step 1): born-digital
 PDFs via [Docling](https://github.com/docling-project/docling), no OCR/equation
@@ -45,8 +46,8 @@ uv pip install torch --index-url https://download.pytorch.org/whl/cu121
 ## Running
 
 Point the server at a directory of PDFs (`DOCS_DIR`) and it serves a document
-picker listing every file there, each linking to its own verification
-inspector once processed:
+picker listing every file there, each linking to its own visual accuracy
+evaluator once processed:
 
 ```bash
 ./scripts/start_ingestion.sh /path/to/pdfs                    # http://127.0.0.1:8001
@@ -63,7 +64,7 @@ seconds) — expected, not a bug. Not recommended for production use.
 Open `http://127.0.0.1:8001/` — every PDF under `DOCS_DIR` (searched
 recursively) shows up with a status (`ready` / `not processed`) and, for
 unprocessed files, a "parse now" button. Ready ones link straight to the
-confidence-sorted inspector for that document. Nothing about this listing is
+accuracy evaluator for that document. Nothing about this listing is
 stored by the service: it's recomputed on every page load by re-hashing files
 in `DOCS_DIR` and checking the artifact store, so any replica gives the same
 answer (see `app/store/documents.py`).
@@ -99,6 +100,30 @@ curl http://127.0.0.1:8001/editions/<edition_id>
 
 open http://127.0.0.1:8001/editions/<edition_id>/ui
 ```
+
+### Visual accuracy evaluator (`/editions/{id}/ui`)
+
+The post-extract review surface for confirming extraction fidelity by eye. It is
+a self-contained page (no build step, no external JS) that fetches the full
+post-consensus `CanonicalEdition` from `GET /editions/{id}` and renders four
+linked views around a single selection — click a source region, a section-tree
+row, or a graph node and it highlights everywhere and loads the object's
+canonical record:
+
+- **Source pane** — the rasterized page with status-colored, clickable bbox
+  overlays (green unanimous · amber majority · orange review · red quarantined ·
+  dashed excluded); selecting a table also outlines its individual cells.
+- **Detail** — the selected object's full canonical record: the **consensus
+  block** shows every parser/engine candidate side-by-side with agree/disagree
+  marks, the `consensus` state, and any `quarantine_reason` (equations render
+  LaTeX + MathML and each engine's candidate; tables render the cell grid with
+  per-cell disagreement flags); plus parameters, cross-references (resolved →
+  clickable / dangling), review reasons + gate repairs, and provenance. With
+  nothing selected it shows a **worst-first review queue**.
+- **Section map** — the canonical clause outline (the "which source section
+  became which canonical object" mapping), with per-node consensus/confidence.
+- **Graph** — a document graph: the nesting tree plus toggleable cross-reference,
+  multi-page continuity, and translation-group edges, nodes colored by status.
 
 `POST /parse` (and the picker's "parse now" / `POST /documents/{path}/parse`)
 are idempotent and content-addressed: the same PDF bytes + the same pipeline
@@ -407,7 +432,9 @@ app/
   store/                   artifact_store.py (content-addressed filesystem store)
                             documents.py (DOCS_DIR listing, re-derived on every request)
                             rasterize.py (page images for the UI)
-  ui/templates/            documents.html (picker), inspector.html (confidence-sorted view)
+  ui/templates/            documents.html (picker), inspector.html (visual accuracy
+                            evaluator: source↔canonical, section map, document graph — one
+                            self-contained page rendered client-side from GET /editions/{id})
   config/ownership.yaml    OWNERSHIP priority table (extractor per content-type/page-class)
 canonical_schema.py        shared contract with comparison-engine (Goal 2, not in this repo yet)
 rulepacks/section_roles.yaml   multilingual front-matter dictionary (confidence booster only)

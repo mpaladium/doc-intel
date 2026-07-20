@@ -2,65 +2,636 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>ingestion-engine — {{ key }}</title>
+<title>ingestion-engine — accuracy evaluator — {{ key }}</title>
 <style>
-  body { font-family: -apple-system, sans-serif; margin: 0; display: flex; height: 100vh; }
-  #page-pane { flex: 1; overflow: auto; padding: 16px; background: #2b2b2b; }
+  /* Status palette + surfaces from the dataviz reference palette (validated).
+     Status colors always ship WITH a text label -- never color alone. */
+  :root {
+    --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
+    --surface: #fcfcfb; --plane: #f9f9f7; --ink: #0b0b0b; --ink2: #52514e;
+    --muted: #898781; --grid: #e1e0d9; --border: rgba(11,11,11,0.10);
+    --sel: #2a78d6;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+         margin: 0; display: flex; height: 100vh; color: var(--ink);
+         background: var(--plane); }
+
+  /* ---- source pane (left) ---- */
+  #source-pane { flex: 1; overflow: auto; padding: 12px 16px; background: #2b2b2b; }
+  .back-link { display: inline-block; margin-bottom: 8px; font-size: 12px; color: #ccc; }
+  #page-nav { margin-bottom: 8px; color: #ccc; font-size: 12px; }
+  #page-nav a { color: #9ec5f4; margin-right: 6px; text-decoration: none; cursor: pointer; }
+  #page-nav a.cur { font-weight: 700; color: #fff; }
   #page-wrap { position: relative; display: inline-block; }
   #page-wrap img { display: block; max-width: none; }
-  .box { position: absolute; border: 1.5px solid; box-sizing: border-box; }
-  .box.normative { border-color: #4caf50; }
-  .box.excluded { border-color: #ff9800; }
-  .box.review { border-color: #f44336; }
-  #side-pane { width: 420px; overflow: auto; border-left: 1px solid #ccc; padding: 8px; }
-  .nav a { margin-right: 6px; }
-  table { border-collapse: collapse; width: 100%; font-size: 12px; }
-  td, th { border-bottom: 1px solid #eee; padding: 3px 4px; text-align: left; }
-  .conf-low { color: #b71c1c; font-weight: bold; }
-  .conf-mid { color: #e65100; }
-  .badge { font-size: 10px; padding: 1px 4px; border-radius: 3px; background: #eee; }
-  .back-link { display: block; margin-bottom: 8px; font-size: 12px; }
+  .box { position: absolute; border: 1.5px solid transparent; box-sizing: border-box;
+         cursor: pointer; }
+  .box:hover { background: rgba(42,120,214,0.12); }
+  .box.s-good { border-color: var(--good); }
+  .box.s-warning { border-color: var(--warning); }
+  .box.s-serious { border-color: var(--serious); }
+  .box.s-critical { border-color: var(--critical); }
+  .box.s-excluded { border-color: var(--muted); border-style: dashed; }
+  .box.sel { border-width: 3px; border-color: var(--sel) !important;
+             background: rgba(42,120,214,0.18); }
+  .box.cell { border-width: 1px; border-color: rgba(42,120,214,0.5); }
+
+  /* ---- right column ---- */
+  #panel { width: 560px; min-width: 420px; overflow: hidden; display: flex;
+           flex-direction: column; background: var(--surface);
+           border-left: 1px solid var(--grid); }
+  #scorecard { padding: 8px 12px; border-bottom: 1px solid var(--grid); }
+  #scorecard h2 { font-size: 13px; margin: 0 0 6px; }
+  .tiles { display: flex; flex-wrap: wrap; gap: 6px; }
+  .tile { border: 1px solid var(--border); border-radius: 5px; padding: 4px 8px;
+          font-size: 11px; min-width: 62px; }
+  .tile .n { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .tile.good .n { color: var(--good); } .tile.warning .n { color: #b07a00; }
+  .tile.serious .n { color: #b4552e; } .tile.critical .n { color: var(--critical); }
+  .tile.muted .n { color: var(--muted); }
+  .engines { font-size: 11px; color: var(--ink2); margin-top: 6px; }
+
+  .tabbar { display: flex; border-bottom: 1px solid var(--grid); }
+  .tabbar button { flex: 1; border: 0; background: none; padding: 7px 4px;
+                   font-size: 12px; cursor: pointer; color: var(--ink2);
+                   border-bottom: 2px solid transparent; }
+  .tabbar button.active { color: var(--ink); border-bottom-color: var(--sel);
+                          font-weight: 600; }
+  .tabbody { flex: 1; overflow: auto; padding: 10px 12px; }
+  .tabbody[hidden] { display: none; }
+
+  /* ---- detail ---- */
+  .d-head { font-size: 14px; font-weight: 700; margin: 0 0 2px; }
+  .d-sub { font-size: 11px; color: var(--muted); margin-bottom: 8px;
+           word-break: break-all; }
+  .grp { margin: 10px 0; }
+  .grp h4 { font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+            color: var(--muted); margin: 0 0 4px; border-bottom: 1px solid var(--grid);
+            padding-bottom: 2px; }
+  .kv { display: grid; grid-template-columns: 110px 1fr; gap: 2px 8px; font-size: 12px; }
+  .kv .k { color: var(--ink2); }
+  .kv .v { word-break: break-word; }
+  .txt { white-space: pre-wrap; font-size: 12px; background: var(--plane);
+         border: 1px solid var(--grid); border-radius: 4px; padding: 6px; }
+  table.cand { width: 100%; border-collapse: collapse; font-size: 12px; }
+  table.cand td, table.cand th { border-bottom: 1px solid var(--grid);
+         padding: 3px 5px; text-align: left; vertical-align: top; }
+  table.cand td.eng { color: var(--ink2); white-space: nowrap; font-weight: 600; }
+  tr.agree td.eng::after { content: " ✓"; color: var(--good); }
+  tr.disagree td.eng::after { content: " ✗"; color: var(--critical); }
+  .mono { font-family: ui-monospace, Menlo, monospace; }
+  .params, .grid-tbl { width: 100%; border-collapse: collapse; font-size: 11px; }
+  .params td, .params th, .grid-tbl td, .grid-tbl th { border: 1px solid var(--grid);
+         padding: 2px 4px; text-align: left; }
+  .grid-tbl td.hdr { background: var(--plane); font-weight: 600; }
+  .xref.dangling { color: var(--critical); }
+  .link { color: var(--sel); cursor: pointer; text-decoration: underline; }
+  .empty { color: var(--muted); font-size: 12px; padding: 16px 4px; }
+
+  /* status badge (color + LABEL, never color alone) */
+  .badge { display: inline-block; font-size: 10px; padding: 1px 5px; border-radius: 3px;
+           border: 1px solid; margin-left: 4px; white-space: nowrap; }
+  .badge.s-good { color: var(--good); border-color: var(--good); }
+  .badge.s-warning { color: #b07a00; border-color: var(--warning); }
+  .badge.s-serious { color: #b4552e; border-color: var(--serious); }
+  .badge.s-critical { color: var(--critical); border-color: var(--critical); }
+  .badge.s-excluded { color: var(--muted); border-color: var(--muted); }
+
+  /* ---- section map tree ---- */
+  .tree-row { display: flex; align-items: center; gap: 4px; font-size: 12px;
+              padding: 2px 2px; cursor: pointer; border-radius: 3px; }
+  .tree-row:hover { background: var(--plane); }
+  .tree-row.sel { background: rgba(42,120,214,0.14); }
+  .tree-row .tog { width: 12px; color: var(--muted); cursor: pointer; user-select: none; }
+  .tree-row .lbl { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tree-row .cid { font-weight: 600; }
+  .tree-row .conf { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .dot { width: 8px; height: 8px; border-radius: 2px; flex: 0 0 auto; }
+  .dot.s-good { background: var(--good); } .dot.s-warning { background: var(--warning); }
+  .dot.s-serious { background: var(--serious); } .dot.s-critical { background: var(--critical); }
+  .dot.s-excluded { background: var(--muted); }
+
+  /* ---- graph ---- */
+  #graph-controls { font-size: 11px; margin-bottom: 6px; color: var(--ink2); }
+  #graph-controls label { margin-right: 8px; }
+  #graph-scroll { overflow: auto; border: 1px solid var(--grid); border-radius: 4px;
+                  background: var(--surface); height: calc(100% - 30px); }
+  .gnode rect { stroke-width: 1.5; cursor: pointer; }
+  .gnode.sel rect { stroke: var(--sel); stroke-width: 3; }
+  .gnode text { font-size: 10px; fill: var(--ink); pointer-events: none;
+                font-variant-numeric: tabular-nums; }
+  .gedge { fill: none; stroke: var(--grid); stroke-width: 1.2; }
+  .gedge.nest { stroke: #c3c2b7; }
+  .gedge.xref { stroke: #4a3aa7; stroke-dasharray: 2 2; }
+  .gedge.cont { stroke: #2a78d6; stroke-dasharray: 5 3; }
+  .gedge.trans { stroke: #008300; stroke-dasharray: 4 4; }
+  .glegend { font-size: 10px; fill: var(--ink2); }
 </style>
 </head>
-<body>
-  <div id="page-pane">
-    <a class="back-link" href="/" style="color:#ccc;">&larr; all documents</a>
-    <div class="nav">
-      {% for n in page_numbers %}
-        <a href="?page={{ n }}"{% if n == page %} style="font-weight:bold"{% endif %}>{{ n }}</a>
-      {% endfor %}
+<body data-key="{{ key }}">
+  <div id="source-pane">
+    <a class="back-link" href="/">&larr; all documents</a>
+    <div id="page-nav"></div>
+    <div id="page-wrap"><img id="page-img"><div id="overlays"></div></div>
+  </div>
+
+  <div id="panel">
+    <div id="scorecard">
+      <h2>Accuracy evaluator</h2>
+      <div class="tiles" id="tiles"></div>
+      <div class="engines" id="engine-list"></div>
     </div>
-    <div id="page-wrap">
-      <img src="/editions/{{ key }}/pages/{{ page }}.png">
-      {% for o in overlays %}
-        <div class="box {% if o.review_required %}review{% elif o.section_role != 'normative' %}excluded{% else %}normative{% endif %}"
-             style="left:{{ o.left }}px; top:{{ o.top }}px; width:{{ o.width }}px; height:{{ o.height }}px;"
-             title="{{ o.type }} conf={{ '%.2f'|format(o.confidence) }} role={{ o.section_role }}">
-        </div>
-      {% endfor %}
+    <div class="tabbar">
+      <button data-tab="detail" class="active">Detail</button>
+      <button data-tab="section">Section map</button>
+      <button data-tab="graph">Graph</button>
+    </div>
+    <div class="tabbody" id="tab-detail"></div>
+    <div class="tabbody" id="tab-section" hidden></div>
+    <div class="tabbody" id="tab-graph" hidden>
+      <div id="graph-controls"></div>
+      <div id="graph-scroll"></div>
     </div>
   </div>
-  <div id="side-pane">
-    <h3>Confidence-sorted inspector</h3>
-    <p>Worst elements first — independent of page order.</p>
-    <table>
-      <tr><th>page</th><th>type</th><th>role</th><th>conf</th><th>text</th></tr>
-      {% for n in confidence_sorted %}
-        <tr>
-          <td><a href="?page={{ n.provenance.page }}">{{ n.provenance.page }}</a></td>
-          <td>{{ n.type }}</td>
-          <td>
-            {{ n.section_role }}
-            {% if not n.compliance_relevant %}<span class="badge">excluded</span>{% endif %}
-            {% if n.review_required %}<span class="badge">review</span>{% endif %}
-          </td>
-          <td class="{% if n.provenance.confidence < 0.6 %}conf-low{% elif n.provenance.confidence < 0.85 %}conf-mid{% endif %}">
-            {{ '%.2f'|format(n.provenance.confidence) }}
-          </td>
-          <td>{{ (n.text or '')[:60] }}</td>
-        </tr>
-      {% endfor %}
-    </table>
-  </div>
+
+<script>
+{% raw %}
+"use strict";
+const KEY = document.body.dataset.key;
+let EDITION, PAGE_SIZES = {}, DPI = 150, SCALE = 150/72, PAGE_IMAGES = [];
+const NODES = {}, PARENT = {}, DEPTH = {}, CLAUSE2NODE = {}, TGROUPS = {};
+let CUR_PAGE = 1, SELECTED = null, curTab = "detail";
+let lastNavTab = "section";  // where to return when leaving Detail
+
+const esc = s => (s == null ? "" : String(s)).replace(/[&<>"]/g,
+  c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c]));
+
+// ---- data load + index -----------------------------------------------------
+async function load() {
+  const r = await fetch(`/editions/${KEY}`);
+  if (!r.ok) { document.getElementById("tab-detail").innerHTML =
+    `<p class="empty">edition not ready (${r.status})</p>`; return; }
+  EDITION = await r.json();
+  const pp = EDITION.pipeline_provenance || {};
+  PAGE_SIZES = pp.page_sizes || {};
+  DPI = pp.raster_dpi || 150;
+  SCALE = DPI / 72;
+  PAGE_IMAGES = EDITION.page_image_urls || [];
+  indexNodes(EDITION.root, null, 0);
+  Object.values(NODES).forEach(n => {
+    if (n.clause_id) CLAUSE2NODE[n.clause_id] = n.id;
+    if (n.translation_group_id)
+      (TGROUPS[n.translation_group_id] = TGROUPS[n.translation_group_id] || []).push(n.id);
+  });
+  renderScorecard();
+  renderPageNav();
+  showPage(firstPage());
+  renderSection();
+  renderGraph();
+  renderDetail(null);
+}
+function indexNodes(n, parent, depth) {
+  NODES[n.id] = n; PARENT[n.id] = parent; DEPTH[n.id] = depth;
+  (n.children || []).forEach(c => indexNodes(c, n.id, depth + 1));
+}
+const allNodes = () => Object.values(NODES);
+function firstPage() {
+  const ps = allNodes().map(n => n.provenance && n.provenance.page).filter(Boolean);
+  return ps.length ? Math.min(...ps) : 1;
+}
+
+// ---- status (drives every color; always paired with a text label) ----------
+function statusOf(n) {
+  if (n.consensus === "quarantined") return "critical";
+  if (n.review_required) return "serious";
+  if (n.consensus === "majority") return "warning";
+  if (n.compliance_relevant === false || (n.section_role && n.section_role !== "normative"))
+    return "excluded";
+  return "good";
+}
+const STATUS_LABEL = { good:"unanimous", warning:"majority", serious:"review",
+                       critical:"quarantined", excluded:"excluded" };
+
+// ---- scorecard -------------------------------------------------------------
+function renderScorecard() {
+  const counts = { good:0, warning:0, serious:0, critical:0, excluded:0 };
+  let total = 0;
+  allNodes().forEach(n => {
+    if (n.id === EDITION.root.id) return;
+    if (!(n.text || n.cells || n.latex)) return;
+    total++; counts[statusOf(n)]++;
+  });
+  const tile = (cls, n, lbl) =>
+    `<div class="tile ${cls}"><div class="n">${n}</div>${lbl}</div>`;
+  document.getElementById("tiles").innerHTML =
+    tile("", total, "objects") +
+    tile("good", counts.good, "unanimous") +
+    tile("warning", counts.warning, "majority") +
+    tile("serious", counts.serious, "review") +
+    tile("critical", counts.critical, "quarantined") +
+    tile("muted", counts.excluded, "excluded");
+  const engines = new Set();
+  allNodes().forEach(n => Object.keys(n.parsers || {}).forEach(e => engines.add(e)));
+  document.getElementById("engine-list").innerHTML =
+    `lang: <b>${esc(EDITION.lang_primary || "?")}</b> · pipeline ${esc(EDITION.schema_version||"")}`
+    + ` · engines seen: ${[...engines].map(esc).join(", ") || "(single-parser)"}`;
+}
+
+// ---- source pane -----------------------------------------------------------
+function renderPageNav() {
+  const pages = [...new Set(allNodes().map(n => n.provenance && n.provenance.page)
+    .filter(Boolean))].sort((a, b) => a - b);
+  document.getElementById("page-nav").innerHTML = "page: " + pages.map(p =>
+    `<a data-page="${p}" class="${p === CUR_PAGE ? "cur" : ""}">${p}</a>`).join(" ");
+  document.querySelectorAll("#page-nav a").forEach(a =>
+    a.onclick = () => showPage(+a.dataset.page));
+}
+function boxFor(bbox, page) {
+  const [l, t, r, b] = bbox;
+  const ps = PAGE_SIZES[String(page)] || [612, 792];
+  const ph = ps[1];
+  return { left: l*SCALE, top: (ph-t)*SCALE, width: (r-l)*SCALE, height: (t-b)*SCALE };
+}
+function showPage(page) {
+  CUR_PAGE = page;
+  const img = document.getElementById("page-img");
+  img.src = `/editions/${KEY}/pages/${page}.png`;
+  renderPageNav();
+  const ov = document.getElementById("overlays");
+  ov.innerHTML = "";
+  allNodes().forEach(n => {
+    if (n.id === EDITION.root.id) return;
+    if (!n.provenance || n.provenance.page !== page) return;
+    if (!(n.text || n.cells || n.latex)) return;
+    const bx = boxFor(n.provenance.bbox, page);
+    const d = document.createElement("div");
+    d.className = `box s-${statusOf(n)}` + (n.id === SELECTED ? " sel" : "");
+    d.style.cssText = `left:${bx.left}px;top:${bx.top}px;width:${bx.width}px;height:${bx.height}px`;
+    d.title = `${n.type} · ${STATUS_LABEL[statusOf(n)]} · conf ${(n.provenance.confidence).toFixed(2)}`;
+    d.onclick = () => select(n.id);
+    d.dataset.id = n.id;
+    ov.appendChild(d);
+  });
+  // per-cell overlays for a selected table on this page
+  const sel = SELECTED && NODES[SELECTED];
+  if (sel && sel.cells) sel.cells.forEach(c => {
+    if (!c.bbox || (c.page || sel.provenance.page) !== page) return;
+    const bx = boxFor(c.bbox, page);
+    const d = document.createElement("div");
+    d.className = "box cell";
+    d.style.cssText = `left:${bx.left}px;top:${bx.top}px;width:${bx.width}px;height:${bx.height}px`;
+    d.title = `cell [${c.row},${c.col}] ${c.text || ""}`;
+    ov.appendChild(d);
+  });
+}
+
+// ---- selection (links all views) -------------------------------------------
+function select(id) {
+  if (!NODES[id]) return;
+  SELECTED = id;
+  const n = NODES[id];
+  if (n.provenance && n.provenance.page !== CUR_PAGE) showPage(n.provenance.page);
+  else showPage(CUR_PAGE);  // re-render overlays for .sel + cell boxes
+  const selBox = document.querySelector(`#overlays .box[data-id="${cssEsc(id)}"]`);
+  if (selBox) selBox.scrollIntoView({ block: "center", inline: "center" });
+  document.querySelectorAll(".tree-row").forEach(r =>
+    r.classList.toggle("sel", r.dataset.id === id));
+  expandAncestorsInTree(id);
+  const tr = document.querySelector(`.tree-row[data-id="${cssEsc(id)}"]`);
+  if (tr) tr.scrollIntoView({ block: "nearest" });
+  document.querySelectorAll(".gnode").forEach(g =>
+    g.classList.toggle("sel", g.dataset.id === id));
+  renderDetail(id);
+  setTab("detail");
+}
+const cssEsc = s => (window.CSS && CSS.escape) ? CSS.escape(s) : s.replace(/"/g, '\\"');
+
+// ---- detail ----------------------------------------------------------------
+function renderDetail(id) {
+  const el = document.getElementById("tab-detail");
+  if (!id) { el.innerHTML = reviewQueue(); wireLinks(el); return; }
+  const n = NODES[id];
+  const st = statusOf(n);
+  let h = `<div class="d-head">${esc(n.clause_id || n.type)}
+      <span class="badge s-${st}">${STATUS_LABEL[st]}</span></div>
+    <div class="d-sub">${esc(n.id)}</div>`;
+
+  // identity
+  h += group("identity", kv([
+    ["type", n.type + (n.cdm_type ? ` / ${n.cdm_type}` : "")],
+    ["clause_id", n.clause_id], ["section_role", n.section_role],
+    ["lang", n.lang],
+    ["translation_group", n.translation_group_id
+      ? `${esc(n.translation_group_id)} ` + tgroupLinks(n) : null],
+    ["computes_limit", n.type === "equation" ? String(n.computes_limit) : null],
+  ]));
+
+  // consensus block
+  h += consensusBlock(n);
+
+  // text
+  if (n.type === "equation") {
+    h += group("equation", (n.mathml ? `<div class="txt">${n.mathml}</div>` : "")
+      + kv([["latex", n.latex ? `<span class="mono">${esc(n.latex)}</span>` : null],
+            ["defines", n.defines]]));
+  } else if (n.cells) {
+    h += group("table cells", gridTable(n));
+  } else {
+    const raw = n.raw_text || n.text;
+    h += group("text", `<div class="txt">${esc(raw || "")}</div>`
+      + (n.normalized_text && n.normalized_text !== raw
+         ? `<div style="font-size:10px;color:var(--muted);margin-top:4px">normalized</div>
+            <div class="txt">${esc(n.normalized_text)}</div>` : ""));
+  }
+
+  if (n.parameters && n.parameters.length) h += group("parameters", paramTable(n.parameters));
+  if (n.xrefs && n.xrefs.length) h += group("cross-references", xrefList(n.xrefs));
+  if (n.review_required || (n.review_reasons||[]).length || (n.repairs||[]).length)
+    h += group("review", reviewBlock(n));
+
+  h += group("provenance", kv([
+    ["page", n.provenance.page], ["parser", n.provenance.parser],
+    ["confidence", n.provenance.confidence != null ? n.provenance.confidence.toFixed(3) : null],
+    ["model", n.provenance.model_version],
+    ["bbox", "[" + (n.provenance.bbox||[]).map(x => x.toFixed(0)).join(", ") + "]"],
+  ]));
+  el.innerHTML = h;
+  wireLinks(el);
+}
+function group(title, body) { return `<div class="grp"><h4>${title}</h4>${body}</div>`; }
+function kv(rows) {
+  const r = rows.filter(([, v]) => v != null && v !== "")
+    .map(([k, v]) => `<div class="k">${esc(k)}</div><div class="v">${v}</div>`).join("");
+  return r ? `<div class="kv">${r}</div>` : `<div class="empty">—</div>`;
+}
+function consensusBlock(n) {
+  const parsers = n.parsers || {};
+  const engines = Object.keys(parsers);
+  const st = statusOf(n);
+  let body = `<div class="kv"><div class="k">state</div>
+    <div class="v"><span class="badge s-${st}">${esc(n.consensus)}</span></div></div>`;
+  if (n.quarantine_reason)
+    body += `<div class="txt" style="color:var(--critical);margin:4px 0">${esc(n.quarantine_reason)}</div>`;
+  if (engines.length) {
+    const authority = n.latex || n.raw_text || n.text || "";
+    const norm = s => (s || "").replace(/\s+/g, " ").trim();
+    const rows = engines.map(e => {
+      const cand = parsers[e];
+      const cls = cand == null ? "" :
+        (norm(cand) === norm(authority) ? "agree" : "disagree");
+      return `<tr class="${cls}"><td class="eng">${esc(e)}</td>
+        <td class="mono">${cand == null ? '<span class="empty">null</span>' : esc(cand)}</td></tr>`;
+    }).join("");
+    body += `<table class="cand"><tr><th>engine candidate</th><th>value</th></tr>${rows}</table>`;
+  } else {
+    body += `<div class="empty" style="padding:4px">single-parser (trivially unanimous)</div>`;
+  }
+  return group("consensus", body);
+}
+function paramTable(ps) {
+  const rows = ps.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.comparator||"")}</td>
+    <td>${esc(p.value != null ? p.value : (p.range ? p.range.join("–") : ""))}</td>
+    <td>${esc(p.unit||"")}</td><td>${esc(p.condition||"")}</td>
+    <td>${esc(p.tolerance ? JSON.stringify(p.tolerance) : "")}</td></tr>`).join("");
+  return `<table class="params"><tr><th>name</th><th>cmp</th><th>value</th>
+    <th>unit</th><th>condition</th><th>tol</th></tr>${rows}</table>`;
+}
+function gridTable(n) {
+  const cells = n.cells || [];
+  if (!cells.length) return `<div class="empty">no cells</div>`;
+  const maxR = Math.max(...cells.map(c => c.row + (c.rowspan||1) - 1));
+  const maxC = Math.max(...cells.map(c => c.col + (c.colspan||1) - 1));
+  const at = {};
+  cells.forEach(c => { at[`${c.row},${c.col}`] = c; });
+  let h = `<table class="grid-tbl">`;
+  for (let r = 0; r <= maxR; r++) {
+    h += "<tr>";
+    for (let c = 0; c <= maxC; c++) {
+      const cell = at[`${r},${c}`];
+      if (!cell) { h += "<td></td>"; continue; }
+      const dis = cell.parsers && Object.values(cell.parsers)
+        .some(v => v != null && v !== cell.text);
+      h += `<td class="${cell.is_column_header ? "hdr" : ""}"
+        ${cell.rowspan>1?`rowspan="${cell.rowspan}"`:""} ${cell.colspan>1?`colspan="${cell.colspan}"`:""}
+        title="${esc(cell.parsers ? JSON.stringify(cell.parsers) : "")}">
+        ${esc(cell.text)}${dis?' <span class="badge s-critical">≠</span>':""}</td>`;
+    }
+    h += "</tr>";
+  }
+  return h + "</table>";
+}
+function xrefList(xrefs) {
+  return xrefs.map(x => {
+    const tgt = x.target_clause_id;
+    const resolved = tgt != null;
+    const link = resolved && CLAUSE2NODE[tgt]
+      ? ` &rarr; <span class="link" data-goto="${esc(CLAUSE2NODE[tgt])}">${esc(tgt)}</span>` : "";
+    return `<div class="xref ${resolved ? "" : "dangling"}">${esc(x.kind)}: “${esc(x.text)}”`
+      + (resolved ? link : ` <span class="badge s-critical">unresolved</span>`) + `</div>`;
+  }).join("");
+}
+function reviewBlock(n) {
+  let h = kv([["review_required", String(n.review_required)]]);
+  if ((n.review_reasons||[]).length)
+    h += `<div style="font-size:12px">reasons: ${n.review_reasons.map(esc).join(", ")}</div>`;
+  if ((n.repairs||[]).length)
+    h += `<div class="txt" style="margin-top:4px">${esc(JSON.stringify(n.repairs, null, 1))}</div>`;
+  return h;
+}
+function tgroupLinks(n) {
+  const ids = (TGROUPS[n.translation_group_id] || []).filter(i => i !== n.id);
+  return ids.map(i => `<span class="link" data-goto="${esc(i)}">${esc(NODES[i].lang||NODES[i].clause_id||i)}</span>`).join(" ");
+}
+function reviewQueue() {
+  const q = allNodes().filter(n => n.id !== EDITION.root.id &&
+    (n.consensus === "quarantined" || n.review_required || n.consensus === "majority"))
+    .sort((a, b) => (a.provenance.confidence) - (b.provenance.confidence));
+  if (!q.length) return `<p class="empty">Nothing flagged — every object is unanimous and admitted.
+    Select a source region, tree row, or graph node to inspect its canonical record.</p>`;
+  const rows = q.slice(0, 300).map(n => {
+    const st = statusOf(n);
+    return `<div class="tree-row" data-goto="${esc(n.id)}">
+      <span class="dot s-${st}"></span>
+      <span class="lbl"><span class="cid">${esc(n.clause_id || n.type)}</span>
+        — ${esc((n.text || n.latex || "").slice(0, 50))}</span>
+      <span class="badge s-${st}">${STATUS_LABEL[st]}</span>
+      <span class="conf">${n.provenance.confidence.toFixed(2)}</span></div>`;
+  }).join("");
+  return `<div class="grp"><h4>review queue — worst first (${q.length})</h4>${rows}</div>`;
+}
+function wireLinks(root) {
+  root.querySelectorAll("[data-goto]").forEach(e =>
+    e.onclick = () => select(e.dataset.goto));
+}
+
+// ---- section map -----------------------------------------------------------
+function renderSection() {
+  const el = document.getElementById("tab-section");
+  el.innerHTML = (EDITION.root.children || []).map(c => treeRow(c)).join("")
+    || `<p class="empty">no sections</p>`;
+  el.querySelectorAll(".tree-row").forEach(r => {
+    r.onclick = e => {
+      if (e.target.classList.contains("tog")) { toggleTree(r); return; }
+      select(r.dataset.id);
+    };
+  });
+}
+function treeRow(n) {
+  const kids = n.children || [];
+  const st = statusOf(n);
+  const label = n.clause_id
+    ? `<span class="cid">${esc(n.clause_id)}</span> ${esc((n.text||"").slice(0,42))}`
+    : `${esc(n.type)} ${esc((n.text||n.latex||"").slice(0,42))}`;
+  const row = `<div class="tree-row" data-id="${esc(n.id)}" style="padding-left:${DEPTH[n.id]*10}px">
+      <span class="tog">${kids.length ? "▾" : ""}</span>
+      <span class="dot s-${st}"></span>
+      <span class="lbl">${label}</span>
+      <span class="badge s-${st}">${STATUS_LABEL[st]}</span>
+      <span class="conf">${n.provenance.confidence.toFixed(2)}</span>
+    </div>`;
+  const children = kids.length
+    ? `<div class="tree-kids" data-parent="${esc(n.id)}">${kids.map(treeRow).join("")}</div>` : "";
+  return row + children;
+}
+function toggleTree(row) {
+  const kids = row.nextElementSibling;
+  if (!kids || !kids.classList.contains("tree-kids")) return;
+  const hide = kids.style.display !== "none";
+  kids.style.display = hide ? "none" : "";
+  row.querySelector(".tog").textContent = hide ? "▸" : "▾";
+}
+function expandAncestorsInTree(id) {
+  let p = PARENT[id];
+  while (p) {
+    const kids = document.querySelector(`.tree-kids[data-parent="${cssEsc(p)}"]`);
+    if (kids && kids.style.display === "none") {
+      kids.style.display = "";
+      const row = document.querySelector(`.tree-row[data-id="${cssEsc(p)}"] .tog`);
+      if (row) row.textContent = "▾";
+    }
+    p = PARENT[p];
+  }
+}
+
+// ---- document graph (self-contained SVG, layered tree) ---------------------
+const SVGNS = "http://www.w3.org/2000/svg";
+let SHOW = { xref: true, cont: true, trans: true };
+function inGraph(n) {
+  return n.id === EDITION.root.id || (n.children && n.children.length) ||
+    n.clause_id || ["table", "equation", "figure", "section"].includes(n.type);
+}
+function graphKids(id) { return (NODES[id].children || []).filter(inGraph).map(c => c.id); }
+function renderGraph() {
+  const ctrl = document.getElementById("graph-controls");
+  ctrl.innerHTML = `edges:
+    <label><input type="checkbox" id="e-xref" checked> xref</label>
+    <label><input type="checkbox" id="e-cont" checked> continuity</label>
+    <label><input type="checkbox" id="e-trans" checked> translation</label>
+    &nbsp; <span class="mono">nesting</span> always shown`;
+  ["xref","cont","trans"].forEach(k => {
+    const cb = document.getElementById("e-" + k);
+    cb.onchange = () => { SHOW[k] = cb.checked; drawGraph(); };
+  });
+  drawGraph();
+}
+function drawGraph() {
+  const XS = 46, YS = 62, R = 11;
+  const pos = {}; let cursor = 0;
+  const roots = (EDITION.root.children || []).filter(inGraph).map(c => c.id);
+  function walk(id, depth) {
+    const kids = graphKids(id);
+    if (!kids.length) { pos[id] = { x: cursor * XS, y: depth * YS }; cursor++; return pos[id]; }
+    const cp = kids.map(k => walk(k, depth + 1));
+    pos[id] = { x: (cp[0].x + cp[cp.length-1].x) / 2, y: depth * YS };
+    return pos[id];
+  }
+  roots.forEach(r => { walk(r, 0); cursor++; });
+  const ids = Object.keys(pos);
+  if (!ids.length) { document.getElementById("graph-scroll").innerHTML =
+    `<p class="empty">no structural nodes to graph</p>`; return; }
+  const W = Math.max(...ids.map(i => pos[i].x)) + XS*2 + 40;
+  const H = Math.max(...ids.map(i => pos[i].y)) + YS + 40;
+  const svg = document.createElementNS(SVGNS, "svg");
+  svg.setAttribute("width", W); svg.setAttribute("height", H);
+  svg.innerHTML = `<defs><marker id="arrow" markerWidth="7" markerHeight="7" refX="6" refY="3"
+      orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#4a3aa7"/></marker></defs>`;
+  const PAD = 24;
+  const X = i => pos[i].x + PAD, Y = i => pos[i].y + PAD;
+  const edge = (a, b, cls) => {
+    if (pos[a] == null || pos[b] == null) return;
+    const p = document.createElementNS(SVGNS, "path");
+    const x1 = X(a), y1 = Y(a), x2 = X(b), y2 = Y(b);
+    const my = (y1 + y2) / 2;
+    p.setAttribute("d", `M${x1},${y1} C${x1},${my} ${x2},${my} ${x2},${y2}`);
+    p.setAttribute("class", "gedge " + cls);
+    if (cls === "xref") p.setAttribute("marker-end", "url(#arrow)");
+    svg.appendChild(p);
+  };
+  // nesting edges
+  ids.forEach(id => graphKids(id).forEach(k => edge(id, k, "nest")));
+  // overlay edges
+  ids.forEach(id => {
+    const n = NODES[id];
+    if (SHOW.cont && n.continues_to && pos[n.continues_to]) edge(id, n.continues_to, "cont");
+    if (SHOW.xref) (n.xrefs || []).forEach(x => {
+      const t = x.target_clause_id && CLAUSE2NODE[x.target_clause_id];
+      if (t && t !== id) edge(id, t, "xref");
+    });
+  });
+  if (SHOW.trans) Object.values(TGROUPS).forEach(g => {
+    for (let i = 1; i < g.length; i++) edge(g[0], g[i], "trans");
+  });
+  // nodes
+  ids.forEach(id => {
+    const n = NODES[id], st = statusOf(n);
+    const g = document.createElementNS(SVGNS, "g");
+    g.setAttribute("class", "gnode" + (id === SELECTED ? " sel" : ""));
+    g.setAttribute("transform", `translate(${X(id)},${Y(id)})`);
+    g.dataset.id = id;
+    const label = n.clause_id || ({ table:"T", equation:"∑", figure:"▣", section:"§" }[n.type] || "•");
+    const w = Math.max(2*R, label.length * 6.5 + 10);
+    // Literal hex (not CSS vars): SVG presentation attributes don't resolve
+    // custom properties, only the `style` property does.
+    const fill = { good:"#d7f0d7", warning:"#fdeccb", serious:"#f8ddce",
+                   critical:"#f4d3d3", excluded:"#ececea" }[st];
+    const stroke = { good:"#0ca30c", warning:"#fab219", serious:"#ec835a",
+                     critical:"#d03b3b", excluded:"#898781" }[st];
+    g.innerHTML = `<rect x="${-w/2}" y="-11" width="${w}" height="22" rx="5"
+        fill="${fill}" stroke="${stroke}" stroke-width="1.5"></rect>
+      <text text-anchor="middle" dy="3.5">${esc(label)}</text>`;
+    const tip = `${n.clause_id || n.type} · ${STATUS_LABEL[st]}` +
+      (n.text ? " · " + n.text.slice(0, 40) : "");
+    const t = document.createElementNS(SVGNS, "title"); t.textContent = tip; g.appendChild(t);
+    g.onclick = () => select(id);
+    svg.appendChild(g);
+  });
+  // legend
+  const leg = document.createElementNS(SVGNS, "g");
+  leg.innerHTML = [["nest","nesting","#c3c2b7"],["xref","cross-ref","#4a3aa7"],
+    ["cont","continuity","#2a78d6"],["trans","translation","#008300"]]
+    .map((e, i) => `<line x1="6" y1="${12+i*13}" x2="26" y2="${12+i*13}"
+        class="gedge ${e[0]}" stroke="${e[2]}"></line>
+      <text class="glegend" x="30" y="${15+i*13}">${e[1]}</text>`).join("");
+  svg.appendChild(leg);
+  const box = document.getElementById("graph-scroll");
+  box.innerHTML = ""; box.appendChild(svg);
+}
+
+// ---- tabs ------------------------------------------------------------------
+function setTab(tab) {
+  if (tab !== "detail") lastNavTab = tab;
+  curTab = tab;
+  ["detail", "section", "graph"].forEach(t =>
+    document.getElementById("tab-" + t).hidden = (t !== tab));
+  document.querySelectorAll(".tabbar button").forEach(b =>
+    b.classList.toggle("active", b.dataset.tab === tab));
+}
+document.querySelectorAll(".tabbar button").forEach(b =>
+  b.onclick = () => setTab(b.dataset.tab));
+
+load();
+{% endraw %}
+</script>
 </body>
 </html>

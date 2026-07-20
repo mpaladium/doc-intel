@@ -6,6 +6,38 @@ tag releases yet, so entries are grouped by work session instead of version.
 
 ## Unreleased
 
+### Changed — `/editions/{id}/ui` is now a visual accuracy evaluator
+
+The verification UI grows from a page-image + confidence-sorted table into a
+linked **source ↔ canonical accuracy evaluator** for confirming extraction
+fidelity by eye after an extract. No `PIPELINE_VERSION` bump — extraction output
+is unchanged; this is the review surface over it.
+
+- Four **linked** views around one selection model: clicking a source-page
+  overlay, a section-tree row, or a graph node highlights the object everywhere
+  and loads its canonical record.
+  - **Source pane** — status-colored, clickable bbox overlays (unanimous /
+    majority / review / quarantined / excluded); a selected table also outlines
+    its individual cells.
+  - **Detail** — the selected object's full post-consensus record: a consensus
+    block rendering every `parsers[engine]` candidate side-by-side with
+    agree/disagree marks + `consensus` state + `quarantine_reason` (equations
+    show LaTeX + rendered MathML per engine; tables render the cell grid with
+    per-cell disagreement flags), plus parameters, cross-references (resolved →
+    clickable / dangling), review reasons + gate repairs, and provenance. Empty
+    selection shows a worst-first **review queue**.
+  - **Section map** — the canonical clause outline (source-section → canonical
+    object mapping) with per-node consensus/confidence.
+  - **Graph** — a document graph: nesting tree + toggleable cross-reference,
+    continuity, and translation-group edges, colored by status.
+- Implemented as ONE self-contained page (`app/ui/templates/inspector.html`) —
+  inline CSS + vanilla JS + inline SVG, no build step and no external/CDN JS
+  (the platform is offline). It fetches everything from the existing
+  `GET /editions/{id}` JSON, so `inspector_ui` (`app/api.py`) is trimmed to a
+  readiness check + template shell (server-side overlay computation removed).
+  Status colors follow the dataviz reference palette and always pair with a
+  text label. Route + JSON-contract smoke tests added (`tests/test_documents.py`).
+
 ### Added — Wave 4 (cont.): MinerU + Surya as out-of-process N-version corroborators (0.12.0)
 
 The two deferred engines named in the reference authority matrix
