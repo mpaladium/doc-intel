@@ -23,7 +23,7 @@ set -euo pipefail
 : "${HOST:=127.0.0.1}"
 : "${PORT:=8001}"
 BASE_URL="http://${HOST}:${PORT}"
-uv cache clean
+
 docs_dir="${1:-}"
 if [[ -z "${docs_dir}" || ! -d "${docs_dir}" ]]; then
   echo "usage: $0 <path-to-docs-dir>" >&2
