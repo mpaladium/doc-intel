@@ -90,6 +90,37 @@ def annotate_node(node: Node) -> Node:
     return node.model_copy(update=update)
 
 
+def link_translation_groups(root: Node) -> Node:
+    """`translation_group_id` (canonical-model.md §Multilingual): one object per
+    language instance, LINKED, never merged. A bilingual standard carries the
+    same clause in two languages as separate nodes sharing a clause_id; this
+    pass gives every node of such a clause the same deterministic group id
+    (`tg:<clause_id>`), assigned ONLY when the clause genuinely exists in >=2
+    distinct languages -- a monolingual clause gets nothing, and nothing is ever
+    merged (a change in one language but not the other stays a reportable
+    finding). Deterministic; runs after lang.annotate_node + clause_ids."""
+    langs_by_clause: dict[str, set[str]] = {}
+
+    def collect(n: Node):
+        if n.clause_id and n.lang:
+            langs_by_clause.setdefault(n.clause_id, set()).add(n.lang)
+        for c in n.children:
+            collect(c)
+
+    collect(root)
+    multilingual = {cid for cid, langs in langs_by_clause.items() if len(langs) >= 2}
+    if not multilingual:
+        return root
+
+    def visit(n: Node) -> Node:
+        n = n.model_copy(update={"children": [visit(c) for c in n.children]})
+        if n.clause_id in multilingual and n.lang and n.translation_group_id is None:
+            n = n.model_copy(update={"translation_group_id": f"tg:{n.clause_id}"})
+        return n
+
+    return visit(root)
+
+
 def dominant_lang(node: Node) -> str | None:
     """Most common non-None `lang` across all nodes -- the document's
     `lang_primary`. Ties broken by first-seen for determinism."""

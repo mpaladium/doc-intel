@@ -25,7 +25,15 @@ owners:
     UNCERTAIN: [docling]
 
   equation:
-    DIGITAL_CLEAN: [docling]   # mineru would take priority here once integrated
+    # Docling's CodeFormula enrichment emits valid structured LaTeX (verified:
+    # real subscripts, \text, \times, fractions -- NOT the flattened garble the
+    # reference's "never accept Docling equations" note assumed, which predates
+    # formula enrichment). So Docling OWNS the equation lane here. GLM-OCR and
+    # MinerU/UniMERNet are now LIVE (opt-in) CORROBORATORS: each contributes an
+    # independent LaTeX candidate for equation consensus (assemble._apply_equation
+    # _corroboration), and a disagreement quarantines the equation with all
+    # candidates kept -- they cross-check Docling, they never replace it.
+    DIGITAL_CLEAN: [docling]
     DIGITAL_DIRTY: [docling]
     SCANNED: [docling]
     UNCERTAIN: [docling]

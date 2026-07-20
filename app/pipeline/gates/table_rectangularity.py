@@ -6,12 +6,20 @@ Detects dropped cells, merged-cell collapse, header rows misread as data. A
 table with an ambiguous cell is worse than no table, because downstream it will
 silently produce a parameter comparison against a hole -> quarantine (no
 repair: which cell was dropped is not uniquely determined).
+
+Additional sub-check (verification-rules.md): no MANDATORY column is empty --
+"mandatory" is per-table-role, and a limit table's limit column is the case that
+matters (a hole in a limit column is a compliance comparison against nothing).
+The units-row consistency sub-check (a units row agrees with the values it
+governs) is fuzzier -- distinguishing a genuine units row from a data row of
+unit-like strings needs table-role modelling -- and is deferred.
 """
 
 from __future__ import annotations
 
 from canonical_schema import Node
 from app.pipeline.gates import GateReport, Outcome, quarantine, transform_tree
+from app.pipeline.parameters import _LIMIT_KEYWORD
 
 
 def _coverage_ok(cells) -> tuple[bool, str]:
@@ -39,10 +47,28 @@ def _coverage_ok(cells) -> tuple[bool, str]:
     return True, ""
 
 
+def _mandatory_column_ok(cells) -> tuple[bool, str]:
+    """No limit-bearing column (its header matches a limit keyword) has an empty
+    data cell. A blank in a limit column is a compliance comparison against
+    nothing -- worth a human look even when the grid is rectangular."""
+    header_rows = {c.row for c in cells if c.is_column_header} or {0}
+    for c in cells:
+        if c.row in header_rows or not c.header_path:
+            continue
+        if any(_LIMIT_KEYWORD.search(h) for h in c.header_path) and not (c.text or "").strip():
+            return False, (f"empty cell in a mandatory limit column "
+                           f"(row {c.row}, col {c.col}, header {c.header_path})")
+    return True, ""
+
+
 def _check_node(node: Node) -> tuple[Node, list[Outcome]]:
     if node.type != "table" or node.cells is None:
         return node, []
     ok, reason = _coverage_ok(node.cells)
+    if not ok:
+        node, out = quarantine(node, "table_rectangularity", reason)
+        return node, [out]
+    ok, reason = _mandatory_column_ok(node.cells)
     if not ok:
         node, out = quarantine(node, "table_rectangularity", reason)
         return node, [out]

@@ -28,8 +28,8 @@ import fitz  # PyMuPDF
 
 from canonical_schema import CanonicalEdition, Node, Provenance
 from app.pipeline import (
-    canon_equation, canon_units, caption_attach, classify_type, continuity, gates, lang,
-    lattice, nested_table, parameters, topology, triage, xref,
+    canon_equation, canon_units, caption_attach, classify_type, continuity, gates, identity,
+    lang, lattice, nested_table, parameters, topology, triage, xref,
 )
 from app.pipeline.extract_docling import DOCLING_VERSION, extract
 from app.pipeline.route import Ownership
@@ -218,16 +218,176 @@ def _apply_table_geometry_consensus(root: Node, pdf_bytes: bytes) -> Node:
         doc.close()
 
 
+def _crop_region(doc: "fitz.Document", page_no: int,
+                 bbox_bottomleft: tuple[float, float, float, float],
+                 zoom: float = 3.0, pad: float = 4.0):
+    """Rasterize one node's region to a PIL image for a vision engine. Docling
+    bbox (bottom-left) -> top-left clip; None when the page is out of range."""
+    import io as _io
+
+    from PIL import Image
+
+    from app.pipeline.runs import docling_bbox_to_topleft
+
+    if not (1 <= page_no <= doc.page_count):
+        return None
+    page = doc[page_no - 1]
+    x0, y0, x1, y1 = docling_bbox_to_topleft(bbox_bottomleft, page.rect.height)
+    clip = fitz.Rect(x0 - pad, y0 - pad, x1 + pad, y1 + pad) & page.rect
+    if clip.is_empty:
+        return None
+    pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=clip)
+    return Image.open(_io.BytesIO(pix.tobytes("png")))
+
+
+# The equation-lane corroborators, in deterministic priority order (SKILLS.md
+# rule 5: disagreement resolution extends a priority table, never an ad-hoc
+# call-site heuristic). Each is a module exposing available()/recognize_formula;
+# each contributes an INDEPENDENT LaTeX candidate next to the Docling CodeFormula
+# authority. Order is the tie-broken reporting order, not an authority claim --
+# the authority is always Docling's stored `node.latex`.
+def _equation_engines():
+    from app.pipeline.engines import glm_ocr, mineru
+    return [glm_ocr, mineru]
+
+
+def _apply_equation_corroboration(root: Node, pdf_bytes: bytes) -> Node:
+    """Equation-lane consensus (parser-consensus.md equation authority): every
+    available formula engine (GLM-OCR, MinerU/UniMERNet) produces an independent
+    LaTeX candidate next to Docling CodeFormula's. Comparison uses
+    `canon_equation.eq_compare_form`, which folds transcription variants
+    (\\text vs \\mathrm, $$ wrappers, \\tag numbers) but preserves genuine glyph
+    differences (\\mathfrak vs \\mathrm) -- if ANY candidate disagrees with the
+    authority the equation quarantines with ALL candidates kept
+    (verification-rules.md: "flag the difference and let a human resolve it").
+    No-op when no engine is available; never rewrites the stored LaTeX."""
+    engines = [e for e in _equation_engines() if e.available()]
+    if not engines:
+        return root
+
+    def has_equations(n: Node) -> bool:
+        return n.type == "equation" or any(has_equations(c) for c in n.children)
+
+    if not has_equations(root):
+        return root
+
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        def visit(node: Node) -> Node:
+            node = node.model_copy(update={"children": [visit(c) for c in node.children]})
+            if node.type != "equation" or not node.latex:
+                return node
+            img = None
+            new_candidates: dict[str, str] = {}
+            for engine in engines:
+                if engine.ENGINE_NAME in node.parsers:
+                    continue  # already corroborated (idempotent re-run)
+                if img is None:
+                    img = _crop_region(doc, node.provenance.page, node.provenance.bbox)
+                if img is None:
+                    break
+                candidate = engine.recognize_formula(img)
+                if candidate is not None:
+                    new_candidates[engine.ENGINE_NAME] = candidate
+            if not new_candidates:
+                return node
+            node = node.model_copy(update={"parsers": {**node.parsers, **new_candidates}})
+            # Disagreement iff any engine candidate differs from the authority
+            # (Docling's stored LaTeX) after variant folding.
+            auth_form = canon_equation.eq_compare_form(node.latex)
+            dissenters = {name: cand for name, cand in new_candidates.items()
+                          if canon_equation.eq_compare_form(cand) != auth_form}
+            if not dissenters:
+                return node  # corroborated -- stays unanimous
+            detail = ", ".join(f"{name}={cand!r}" for name, cand in dissenters.items())
+            return node.model_copy(update={
+                "consensus": "quarantined",
+                "quarantine_reason": (
+                    f"equation engines disagree: docling_formula={node.latex!r} vs {detail}"),
+                "review_required": True,
+                "review_reasons": node.review_reasons + ["equation_engine_disagreement"],
+            })
+
+        return visit(root)
+    finally:
+        doc.close()
+
+
+_OCR_PAGE_CLASSES = {"SCANNED", "UNCERTAIN"}
+
+
+# The scanned-OCR text corroborators, in deterministic order. Each exposes
+# available()/recognize_text and is registered in consensus.GENUINE_TEXT_PARSERS,
+# so `_apply_text_consensus` votes over whatever they populate without a
+# call-site change (SKILLS.md rule 5). GLM-OCR is default-on; Surya is opt-in.
+def _ocr_text_engines():
+    from app.pipeline.engines import glm_ocr, surya
+    return [glm_ocr, surya]
+
+
+def _backfill_ocr_candidates(root: Node, pdf_bytes: bytes,
+                             page_classes: list[TriageResult]) -> Node:
+    """OCR-lane candidates on SCANNED/UNCERTAIN pages (parser-consensus.md OCR
+    authority + confidence ceiling). There is no digital text layer there, so
+    the node text IS a RapidOCR transcription -- recorded under "rapidocr" as a
+    genuine voter -- and the OCR engines (GLM-OCR, Surya) contribute independent
+    second opinions; `_apply_text_consensus` then votes. Also enforces the spec's
+    "any OCR-derived Parameter is quarantined by default": a scanned limit is
+    exactly where digit confusables live. Born-digital pages are untouched
+    ("skip work aggressively"); no-op when no engine is available."""
+    engines = [e for e in _ocr_text_engines() if e.available()]
+
+    scanned_pages = {i + 1 for i, tc in enumerate(page_classes)
+                     if tc.page_class in _OCR_PAGE_CLASSES}
+    if not scanned_pages:
+        return root
+
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        def visit(node: Node) -> Node:
+            node = node.model_copy(update={"children": [visit(c) for c in node.children]})
+            if node.provenance.page not in scanned_pages or not (node.text or "").strip():
+                return node
+            if node.type in ("table", "figure"):
+                return node  # cell text is handled by the table lanes
+            parsers = dict(node.parsers)
+            parsers.setdefault("rapidocr", node.text)
+            img = None
+            for engine in engines:
+                if engine.ENGINE_NAME in parsers:
+                    continue
+                if img is None:
+                    img = _crop_region(doc, node.provenance.page, node.provenance.bbox)
+                if img is None:
+                    break
+                candidate = engine.recognize_text(img)
+                if candidate is not None:
+                    parsers[engine.ENGINE_NAME] = candidate
+            update: dict = {"parsers": parsers}
+            if node.parameters and node.consensus != "quarantined":
+                update.update({
+                    "consensus": "quarantined",
+                    "quarantine_reason": "OCR-derived parameter -- digit confusables live "
+                                         "here; needs human confirmation",
+                    "review_required": True,
+                    "review_reasons": node.review_reasons + ["ocr_derived_parameter"],
+                })
+            return node.model_copy(update=update)
+
+        return visit(root)
+    finally:
+        doc.close()
+
+
 def _apply_text_consensus(root: Node) -> Node:
     """Set `consensus`/`quarantine_reason` from the genuine text transcribers in
     each node's `parsers` (consensus.reconcile_text). Only parsers in
     `GENUINE_TEXT_PARSERS` vote -- Docling's reflow-derived text is a recorded
     corroborator, not a voter (see consensus.GENUINE_TEXT_PARSERS), so with the
-    current PyMuPDF-only transcriber set every node is trivially unanimous and
-    nothing is quarantined here. The pass exists so consensus activates the
-    moment a genuine alternate transcriber (MinerU/Surya) starts populating
-    `parsers`; it never averages, resolves, or discards -- disagreement becomes a
-    quarantine with all candidates kept."""
+    current PyMuPDF-only transcriber set every born-digital node is trivially
+    unanimous; it activates to real quarantine on scanned pages once the OCR
+    engines (GLM-OCR, Surya) populate `parsers`. It never averages, resolves, or
+    discards -- disagreement becomes a quarantine with all candidates kept."""
     from app.pipeline import consensus as _consensus
     from canonical_schema import is_normative
 
@@ -239,7 +399,10 @@ def _apply_text_consensus(root: Node) -> Node:
         # trivially unanimous and already the schema default.
         if len(voters) < 2 or node.consensus == "quarantined":
             return node
-        result = _consensus.reconcile_text(voters, authority="pymupdf",
+        # authority = highest-ranked genuine transcriber present (PyMuPDF on
+        # born-digital regions; the OCR engines on scanned ones)
+        authority = next(p for p in _consensus.TEXT_AUTHORITY_ORDER if p in voters)
+        result = _consensus.reconcile_text(voters, authority=authority,
                                            normative=is_normative(node))
         if result.state == "unanimous":
             return node
@@ -302,6 +465,9 @@ def assemble(pdf_bytes: bytes, source_sha256: str, ocr_enabled: bool = False) ->
     # Reconstruct the clause hierarchy last, so section-role classification
     # still runs over the flat top-level list (as designed) -- nesting only
     # re-parents the already-classified section nodes by clause number.
+    # hoist first: clause nodes Docling buried under the WRONG clause (3.24
+    # inside 3.23) come back to the flat list so nesting places them by number.
+    top_sections = topology.hoist_misnested_clauses(top_sections)
     top_sections = topology.nest_by_clause(top_sections)
 
     root = Node(
@@ -314,6 +480,22 @@ def assemble(pdf_bytes: bytes, source_sha256: str, ocr_enabled: bool = False) ->
     # Cross-references need the whole edition's clause set to resolve, so run
     # over the assembled root (after clause_ids + nesting).
     root = xref.annotate_tree(root)
+
+    # computes_limit (verification-rules.md): an equation whose defined symbol a
+    # normative sibling depends on -- conservative, same-subtree only, runs after
+    # nesting so "same section" is the real clause subtree.
+    root = canon_equation.annotate_computes_limit(root)
+
+    # translation_group_id (canonical-model.md §Multilingual): link -- never
+    # merge -- language instances of the same clause. No-op on monolingual docs.
+    root = lang.link_translation_groups(root)
+
+    # Model-backed corroboration (parser-consensus.md engines, now live):
+    # independent LaTeX candidates per equation (GLM-OCR + MinerU/UniMERNet) and
+    # OCR text candidates on scanned pages (GLM-OCR + Surya). All no-op cleanly
+    # when an engine is unavailable/gated (GLM-OCR default-on; MinerU/Surya opt-in).
+    root = _apply_equation_corroboration(root, pdf_bytes)
+    root = _backfill_ocr_candidates(root, pdf_bytes, page_classes)
 
     # Three-parser table-grid consensus (parser-consensus.md): Docling +
     # pdfplumber geometry must agree or the table quarantines (merged-cell
@@ -334,6 +516,16 @@ def assemble(pdf_bytes: bytes, source_sha256: str, ocr_enabled: bool = False) ->
     # extraction never discards, it quarantines into a review queue.
     gate_report = gates.run_all(root)
     root = gate_report.root
+
+    # Content-addressed identity (canonical-model.md §Identity): the FINAL pass,
+    # so every clause_id is assigned and every id-reference is remapped through
+    # the same old->new map. Replaces the random uuid ids with
+    # standard_id#section_path / doc_id#hash so ids are stable across runs (and,
+    # when numbering is stable, across editions -- the premise of ID-first
+    # alignment). doc_id is the source hash; standard_id is derived best-effort
+    # from a title-page designation (None on a title-page-less fragment).
+    standard_id = identity.derive_standard_id(root)
+    root = identity.restamp_ids(root, doc_id=source_sha256[:16], standard_id=standard_id)
 
     lang_primary = lang.dominant_lang(root)
 

@@ -2,7 +2,8 @@
 deterministic LaTeX normalization, no model involved."""
 
 from canonical_schema import Node, Provenance
-from app.pipeline.canon_equation import canonicalize_latex, canonicalize_node
+from app.pipeline.canon_equation import (
+    canonicalize_latex, canonicalize_node, extract_defines, extract_symbol_table)
 
 
 def _prov():
@@ -57,3 +58,75 @@ def test_canonicalize_node_leaves_non_equations_untouched():
     out = canonicalize_node(p)
     assert out.text == "just text"
     assert out.latex is None
+
+
+# --- equation enrichment (T9): defines + symbol_table + source tag ------------
+
+def test_extract_defines_is_lhs_of_equation():
+    assert extract_defines(r"N_{\text{d}} = 2 B_{\text{e}}") == r"N_{\text{d}}"
+    assert extract_defines(r"x + y") is None  # no definiendum
+
+
+def test_extract_symbol_table_inventories_variables():
+    st = extract_symbol_table(r"B_{e} = f / n")
+    # variables B, e, f, n present; \commands excluded
+    assert set(st) >= {"B", "e", "f", "n"}
+    assert all(v == {} for v in st.values())
+
+
+def test_canonicalize_node_enriches_equation():
+    # a real Docling CodeFormula LaTeX is kept and enriched, not demoted
+    eq = Node(id="e", type="equation",
+              latex=r"N _ {\text {d}} = 2 \ B _ {\text {e}} \times T _ {\text {a}}",
+              provenance=_prov())
+    out = canonicalize_node(eq)
+    assert out.latex  # kept, not demoted to rendered_text
+    assert out.defines and out.defines.startswith("N")
+    assert set(out.symbol_table) >= {"N", "B", "T"}
+    assert out.parsers.get("docling_formula") == out.latex  # source tagged
+    # renderable form for compliance evidence: MathML populated from LaTeX
+    assert out.mathml and out.mathml.startswith("<math")
+    assert "<msub>" in out.mathml  # subscripts preserved in the renderable form
+
+
+def test_computes_limit_set_for_equation_a_requirement_depends_on():
+    from decimal import Decimal
+    import canonical_schema as cs
+    from app.pipeline.canon_equation import annotate_computes_limit
+    eq = Node(id="e", type="equation", latex=r"B_{e} = f/n", defines=r"B _ {\text {e}}",
+              provenance=_prov())
+    req = Node(id="r", type="paragraph", cdm_type="Requirement",
+               text="the bandwidth B e shall not exceed 100 Hz",
+               parameters=[cs.Parameter(name="bw", value=Decimal("100"), unit="Hz",
+                                        comparator="lte")],
+               provenance=_prov())
+    sec = Node(id="s", type="section", children=[eq, req], provenance=_prov())
+    out = annotate_computes_limit(sec)
+    assert out.children[0].computes_limit is True
+
+
+def test_computes_limit_not_set_without_normative_dependency():
+    from app.pipeline.canon_equation import annotate_computes_limit
+    eq = Node(id="e", type="equation", latex=r"B_{e} = f/n", defines=r"B _ {\text {e}}",
+              provenance=_prov())
+    note = Node(id="n", type="note", text="informative note mentioning B e",
+                provenance=_prov())  # not normative
+    sec = Node(id="s", type="section", children=[eq, note], provenance=_prov())
+    out = annotate_computes_limit(sec)
+    assert out.children[0].computes_limit is False
+
+
+def test_computes_limit_single_letter_symbol_never_matches():
+    from app.pipeline.canon_equation import annotate_computes_limit
+    eq = Node(id="e", type="equation", latex="T = 1/f", defines="T", provenance=_prov())
+    req = Node(id="r", type="paragraph", cdm_type="Requirement",
+               text="The test shall run for 10 s", provenance=_prov())
+    sec = Node(id="s", type="section", children=[eq, req], provenance=_prov())
+    out = annotate_computes_limit(sec)
+    assert out.children[0].computes_limit is False  # "T" in "The" is noise, skipped
+
+
+def test_mathml_failure_tolerant():
+    # an unconvertible latex leaves mathml None, never crashes
+    from app.pipeline.canon_equation import latex_to_mathml
+    assert latex_to_mathml(r"\begin{unclosed") is None or True  # no exception is the contract

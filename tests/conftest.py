@@ -10,6 +10,12 @@ formula code path is instead covered deterministically by the stub tests in
 detection is measured by the eval harness (`app/cli/evaluate_samples.py`),
 not the unit suite. A test that specifically wants enrichment can set
 `INGESTION_FORMULAS=1` itself.
+
+GLM-OCR (`INGESTION_GLM_OCR`) is likewise disabled for the suite: it is a
+2.5 GB VLM whose per-region inference would dominate the suite runtime. The
+corroboration WIRING is covered by monkeypatched unit tests
+(test_engine_wiring.py); the real engine is exercised by an opt-in smoke test
+(skipped unless the weights are already cached) and by the eval harness.
 """
 
 import os
@@ -17,3 +23,4 @@ import os
 
 def pytest_configure(config):
     os.environ.setdefault("INGESTION_FORMULAS", "0")
+    os.environ.setdefault("INGESTION_GLM_OCR", "0")

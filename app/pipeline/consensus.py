@@ -44,10 +44,19 @@ OCR_CONFIDENCE_CEILING = 0.95
 # treating it as a co-equal text transcriber manufactures disagreements that are
 # artifacts, not value conflicts -- re-introducing exactly the false-quarantine
 # flood the gates exist to prevent. Docling's candidate is still recorded in
-# `Node.parsers` for the audit trail; it just doesn't force a quarantine. When a
-# genuine alternate transcriber (MinerU for equations, Surya for OCR) populates
-# `parsers`, it votes here and text consensus activates per the spec.
-GENUINE_TEXT_PARSERS = frozenset({"pymupdf", "mineru", "surya"})
+# `Node.parsers` for the audit trail; it just doesn't force a quarantine.
+#
+# On SCANNED pages the situation inverts: there is no digital text layer, so
+# "docling's text" IS a RapidOCR transcription -- genuine; the OCR backfill
+# stores it under "rapidocr" and GLM-OCR contributes the second opinion.
+# "mineru"/"surya" stay registered so those engines can be added without a
+# call-site rewrite.
+GENUINE_TEXT_PARSERS = frozenset({"pymupdf", "glm_ocr", "rapidocr", "mineru", "surya"})
+
+# When several genuine transcribers voted, the authority is the highest-ranked
+# present (parser-consensus.md authority matrix: PyMuPDF owns the born-digital
+# text lane; on scanned regions the OCR engines are the only opinion).
+TEXT_AUTHORITY_ORDER = ("pymupdf", "glm_ocr", "surya", "rapidocr", "mineru")
 
 _WS_RUN = re.compile(r"\s+")
 # line-break hyphenation: "over-\nload" -> "overload". Only join when a hyphen

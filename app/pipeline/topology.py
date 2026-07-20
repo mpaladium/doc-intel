@@ -194,6 +194,61 @@ class _Entry:
         return self.node.model_copy(update={"children": list(self.node.children) + sub_nodes})
 
 
+def hoist_misnested_clauses(top_sections: list[Node]) -> list[Node]:
+    """Un-bury clause nodes Docling nested under the WRONG clause: a node with
+    numeric clause parts P sitting under an ancestor with numeric parts A where
+    A is not a proper prefix of P (DIN's definition paragraph 3.24 inside
+    section 3.23) is cut out -- subtree and all -- and re-emitted at top level
+    in document order, so `nest_by_clause` places it where its NUMBER says it
+    belongs. The compliance tree must reflect clause numbering, not Docling's
+    incidental reading-order nesting; the numbering gate's inventory guard
+    already stopped misreading these as drops, this fixes the TREE itself.
+
+    Recursive: a hoisted node's own subtree is re-examined against ITS parts
+    (3.26 buried inside 3.24 hoists too). Correctly-nested sub-clauses
+    (5.3.5.1 under 5.3.5) and nodes under non-clause ancestors are untouched."""
+    result: list[Node] = []
+
+    def extract(node: Node, ancestor_parts: list[int] | None) -> tuple[Node, list[Node]]:
+        """Returns (node with misnested descendants removed, hoisted nodes)."""
+        own_parts = _numeric_parts(node.clause_id)
+        # the clause context children are judged against: this node's parts if
+        # it is clause-numbered, else the inherited ancestor context
+        ctx = own_parts if own_parts is not None else ancestor_parts
+        kept: list[Node] = []
+        hoisted: list[Node] = []
+        for child in node.children:
+            c_parts = _numeric_parts(child.clause_id)
+            if c_parts is not None and ctx is not None and not _is_proper_prefix(ctx, c_parts):
+                # misnested: hoist the child (recursively cleaning ITS subtree
+                # against its own parts first)
+                cleaned, sub_hoisted = extract(child, c_parts)
+                hoisted.append(cleaned)
+                hoisted.extend(sub_hoisted)
+            else:
+                cleaned, sub_hoisted = extract(child, ctx)
+                kept.append(cleaned)
+                hoisted.extend(sub_hoisted)
+        return node.model_copy(update={"children": kept}), hoisted
+
+    # Running clause context across the FLAT list: a top-level container with
+    # no clause number of its own (Docling emits stray "(en: gloss)" sections
+    # mid-definition-list) will be buried by nest_by_clause under the currently
+    # open clause -- so its clause-numbered descendants must be judged against
+    # that same context or they get buried with it (the DIN 3.26 case). Items
+    # BEFORE any clause opens (title page, TOC -- whose entries legitimately
+    # carry clause numbers) have no running context and stay protected.
+    running: list[int] | None = None
+    for top in top_sections:
+        own = _numeric_parts(top.clause_id)
+        cleaned, hoisted = extract(top, own if own is not None else running)
+        result.append(cleaned)
+        result.extend(hoisted)  # document order: right after their old container
+        if own is not None:
+            running = own
+    return result
+
+
 def nest_by_clause(top_sections: list[Node]) -> list[Node]:
     """Rebuild a flat top-level section list into the clause hierarchy implied
     by each section's `clause_id`. Non-section nodes pass through at top level."""

@@ -1,17 +1,24 @@
 """Gate 7 (spec §"equation integrity"): every Equation has a `latex` field and
 no Equation carries only `rendered_text`.
 
-Detects the silent flattening Docling performs on every formula: `I = V/R`
-becomes `I = V R` -- not mangled enough to look wrong, not structured enough to
-use; downstream an equation that computes a limit gets compared as prose and
-classified editorial. Never fall back to rendered_text: an equation you cannot
-represent structurally is one you cannot compare, and a wrong comparison is
-worse than an acknowledged gap.
+Detects an equation left with no structural LaTeX (only `rendered_text`) -- one
+you cannot compare, which downstream gets diffed as prose and classified
+editorial. Never fall back to rendered_text: a wrong comparison is worse than an
+acknowledged gap.
+
+Note on the LaTeX source: the reference's "Docling flattens formulas to garbled
+text" describes pre-enrichment Docling. Current Docling CodeFormula enrichment
+emits valid structured LaTeX (`N_{\\text{d}} = 2\\ B_{\\text{e}} \\times
+T_{\\text{a}}`), so a Docling equation with balanced LaTeX passes -- it is not
+quarantined merely for being Docling's. MinerU is the registered corroborator
+that adds a second candidate + a real symbol_table.
 
 Sub-checks: latex parses as balanced LaTeX (unbalanced == truncation); every
-symbol in symbol_table appears in latex and vice versa (a defined-but-absent
-symbol means the region was cropped). `computes_limit` depends on cross-
-reference resolution, so that sub-check is deferred to the xref gate.
+symbol in symbol_table appears in latex (a defined-but-absent symbol means the
+region was cropped -- a real cropping guard only once symbol_table comes from an
+INDEPENDENT source like MinerU; canon_equation's LaTeX-derived inventory is
+metadata and trivially satisfies it). `computes_limit` needs a param<->symbol
+graph (MinerU-grade symbol tables) and is deferred.
 
 Deliberately does NOT attempt semantic equivalence (`V=IR` vs `V=RI`): a string
 mismatch there is an acceptable false positive that routes to a human; sympy

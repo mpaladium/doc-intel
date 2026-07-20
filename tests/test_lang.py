@@ -68,3 +68,21 @@ def test_dominant_lang_picks_most_common():
 def test_dominant_lang_none_when_untagged():
     root = _node(children=[_node(text="a"), _node(text="b")])
     assert lang.dominant_lang(root) is None
+
+
+# --- translation_group_id linker (canonical-model.md §Multilingual) ------------
+
+def test_translation_groups_link_same_clause_different_lang():
+    from app.pipeline.lang import link_translation_groups
+    de = _node("5.1 Prüfaufbau", lang_="de").model_copy(update={"clause_id": "5.1"})
+    en = _node("5.1 Test setup", lang_="en").model_copy(update={"clause_id": "5.1"})
+    mono = _node("6 Nur Deutsch", lang_="de").model_copy(update={"clause_id": "6"})
+    root = _node(None, children=[de, en, mono])
+    out = link_translation_groups(root)
+    by_lang = {c.lang: c for c in out.children if c.clause_id == "5.1"}
+    assert by_lang["de"].translation_group_id == by_lang["en"].translation_group_id == "tg:5.1"
+    # monolingual clause: linked to nothing
+    mono_out = [c for c in out.children if c.clause_id == "6"][0]
+    assert mono_out.translation_group_id is None
+    # objects were LINKED, never merged
+    assert len([c for c in out.children if c.clause_id == "5.1"]) == 2

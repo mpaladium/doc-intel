@@ -136,6 +136,59 @@ def _para(text, clause_id=None):
                 children=[], provenance=_prov())
 
 
+def test_hoist_unburies_misnested_definition_clause():
+    # Docling buried 3.24 (with 3.26 inside it) under section 3.23; the hoist
+    # must pull BOTH back to the top-level list, subtrees intact, so
+    # nest_by_clause can place them by number.
+    c326 = _para("3.26 Filterbandbreite", clause_id="3.26")
+    c324 = Node(id="p324", type="paragraph", text="3.24 Angleichung", clause_id="3.24",
+                children=[c326], provenance=_prov())
+    c323 = _sec("3.23 Abweichung", clause_id="3.23", children=[c324])
+    out = topology.hoist_misnested_clauses([c323, _clause("3.27")])
+    ids = [n.clause_id for n in out]
+    assert ids == ["3.23", "3.24", "3.26", "3.27"]  # flat, document order
+    assert out[0].children == []   # 3.23 no longer holds 3.24
+    assert out[1].children == []   # 3.24 no longer holds 3.26
+
+
+def test_hoist_keeps_correctly_nested_subclauses():
+    sub = _sec("5.3.5.1 Aufbau", clause_id="5.3.5.1")
+    parent = _sec("5.3.5 Prüfung", clause_id="5.3.5", children=[sub])
+    out = topology.hoist_misnested_clauses([parent])
+    assert len(out) == 1
+    assert out[0].children[0].clause_id == "5.3.5.1"  # untouched
+
+
+def test_hoist_reaches_into_nonclause_container_mid_clause_run():
+    # the REAL DIN chain: a top-level non-clause section "(en: final slope)"
+    # follows 3.24 and holds 3.26 -- nest would bury the container (and 3.26)
+    # under 3.24, so the hoist must pull 3.26 out using the running context
+    c326 = _para("3.26 Filterbandbreite", clause_id="3.26")
+    stray = _sec("(en: final slope)", clause_id=None, children=[c326])
+    out = topology.hoist_misnested_clauses(
+        [_clause("3.24"), stray, _clause("3.27")])
+    ids = [n.clause_id for n in out]
+    assert ids == ["3.24", None, "3.26", "3.27"]
+    assert out[1].children == []  # container kept, 3.26 extracted
+
+
+def test_hoist_never_touches_toc_entries_before_first_clause():
+    # a TOC section holds clause-numbered entries but precedes any open clause
+    # (no running context) -- its entries must NOT be hoisted into the body
+    entry = _para("5.3 Grenzwerte", clause_id="5.3")
+    toc = _sec("Inhalt", clause_id=None, children=[entry])
+    out = topology.hoist_misnested_clauses([toc, _clause("1")])
+    assert len(out) == 2
+    assert out[0].children[0].clause_id == "5.3"  # still inside the TOC
+
+
+def test_hoist_leaves_prose_and_nonclause_children_alone():
+    prose = _para("ordinary prose under a clause")
+    parent = _sec("4.1 Scope", clause_id="4.1", children=[prose])
+    out = topology.hoist_misnested_clauses([parent])
+    assert len(out) == 1 and len(out[0].children) == 1
+
+
 def test_definition_paragraph_nests_as_sibling_not_child():
     # DIN Terms-&-Definitions: 3.24 arrives typed `paragraph` between sections
     # 3.23 and 3.27. It must become a SIBLING under 3 (so the numbering gate

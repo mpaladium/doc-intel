@@ -6,6 +6,152 @@ tag releases yet, so entries are grouped by work session instead of version.
 
 ## Unreleased
 
+### Added — Wave 4 (cont.): MinerU + Surya as out-of-process N-version corroborators (0.12.0)
+
+The two deferred engines named in the reference authority matrix
+(`docs/references/parser-consensus.md`) are now integrated **alongside** GLM-OCR
+— more genuinely-independent voters is the whole premise of N-version consensus
+(a 3-way equation vote, a 4-way scanned-text vote). GLM-OCR stays the default,
+in-process engine.
+
+**They run out-of-process, and that is forced.** UniMERNet 0.2.3 hard-pins
+`transformers==4.42.4`, Surya wants `transformers>=4.51`, and docling resolves
+`5.8.x`: the three stacks cannot share one virtualenv (`uv lock` is provably
+unsatisfiable — the "known dependency conflicts with Docling pins" the eval doc
+warned about, now measured). So each runs as an HTTP **sidecar** in its own
+environment; the in-repo adapters are thin, stdlib-only clients that degrade to
+"unavailable" (one log line, pipeline continues) when the sidecar URL is unset
+or unreachable — never a hard dependency, and the default lock gains no
+MinerU/Surya deps.
+
+- **MinerU/UniMERNet equation corroborator** (`app/pipeline/engines/mineru.py`,
+  sidecar `INGESTION_MINERU_URL`) — MinerU's formula stage, UniMERNet
+  (`wanderkid/unimernet_base`), **Apache-2.0 code + weights** (the AGPL concern
+  is the full `magic-pdf` pipeline, not this model). An encoder-decoder trained
+  on formula crops — architecturally independent of GLM-OCR's general VLM, which
+  is what makes its agreement real corroboration.
+  `assemble._apply_equation_corroboration` is now N-way over a deterministic
+  engine list (`glm_ocr`, `mineru`): each contributes a LaTeX candidate next to
+  Docling's authority; **any** disagreement (after `canon_equation.eq_compare_form`
+  variant folding) quarantines with all candidates kept, authority never
+  overwritten (SKILLS.md rule 5: a priority table, not a call-site heuristic).
+- **Surya scanned-OCR corroborator** (`app/pipeline/engines/surya.py`, sidecar
+  `INGESTION_SURYA_URL`) — an independent detection+recognition OCR stack.
+  Apache-2.0 code; conditional-commercial Rail-M weights (a second reason to
+  isolate it). Surya 2.x already runs as its own spawned inference server, so a
+  sidecar is native. `assemble._backfill_ocr_candidates` now drives both OCR
+  engines from one list; `surya` was already in `consensus.GENUINE_TEXT_PARSERS`
+  / `TEXT_AUTHORITY_ORDER` so `_apply_text_consensus` votes over it with no
+  call-site change, under the existing 0.95 OCR ceiling + "OCR-derived Parameter
+  quarantined by default".
+- Sidecar contract (`app/pipeline/engines/_sidecar.py`): `POST <url>` raw PNG
+  crop → `200 {"latex"|"text": "..."}`; stdlib `urllib` only, so adding an
+  engine adds no runtime dependency. `INGESTION_SIDECAR_TIMEOUT` (default 30s).
+- Suite: wiring covered by monkeypatched tests (green with no sidecar running —
+  the CI contract). `ownership.yaml`, `engines/__init__.py`,
+  `docs/references/ocr-engine-evaluation.md`, `docs/SKILLS.md` updated.
+
+### Added — Wave 4: deferred engines live — GLM-OCR corroborator, MathML, tree fixes (0.11.0)
+
+Implements the previously-deferred tasks (licensing constraints lifted). Runs
+on Mac (MPS) and NVIDIA CUDA, CPU fallback (`app/pipeline/device.py`,
+`INGESTION_DEVICE` override).
+
+- **GLM-OCR corroborator engine** (`app/pipeline/engines/glm_ocr.py`) — the
+  deferred MinerU (equations) and Surya (OCR) lanes are filled by ONE engine:
+  `zai-org/GLM-OCR`, 0.9B params (~2.5 GB), **MIT weights / Apache-2.0 code**,
+  96.5 UniMERNet formula recognition (the `extract.equation` gold-set
+  benchmark), #1 OmniDocBench v1.5 — run in-process via plain `transformers`
+  `AutoModelForImageTextToText` (the class Docling already loads; zero new
+  runtime stack). Lazy singleton, greedy decode (deterministic), gated by
+  `INGESTION_GLM_OCR`, gracefully unavailable (no weights → one log line,
+  single-parser pipeline as before). Evaluation + decision record:
+  `../docs/references/ocr-engine-evaluation.md`.
+  - **Equation lane**: a second independent LaTeX candidate per equation
+    (`parsers["glm_ocr"]`), compared via `canon_equation.eq_compare_form` — a
+    comparison-only normal form that folds transcription variants (`\text` vs
+    `\mathrm`, `$$`, `\tag`, spaced subscripts) but preserves genuine glyph
+    differences. Measured on DIN's 3 equations: 2 corroborated, 1 **real**
+    disagreement surfaced (`\mathfrak{c}` vs `\mathrm{c}`) → quarantined with
+    both candidates. GLM-OCR also recovers the `\tag{N}` equation numbers
+    Docling drops.
+  - **Scanned-OCR lane**: on SCANNED/UNCERTAIN pages the RapidOCR layer is
+    recorded as the genuine `rapidocr` voter, GLM-OCR contributes the second
+    opinion, and text consensus votes (`TEXT_AUTHORITY_ORDER`: PyMuPDF on
+    born-digital, GLM-OCR on scanned). **OCR-derived Parameters are quarantined
+    by default** per parser-consensus.md.
+- **MathML** (`canon_equation.latex_to_mathml`, new dep `latex2mathml`, MIT,
+  pure-Python): every equation carries a browser-renderable `mathml` form so
+  compliance evidence can SHOW the formula; LaTeX stays the source of truth,
+  conversion is failure-tolerant.
+- **`computes_limit`** (`canon_equation.annotate_computes_limit`): set when a
+  normative sibling in the same section subtree depends on the equation's
+  defined symbol — conservative (multi-char symbol surfaces only, no
+  cross-section inference; a manufactured dependency edge would misclassify an
+  equation edit as an acceptance-criteria change).
+- **`translation_group_id`** (`lang.link_translation_groups`): language
+  instances of the same clause are LINKED (deterministic `tg:<clause_id>`),
+  never merged; no-op on monolingual documents.
+- **Misnested-clause hoist** (`topology.hoist_misnested_clauses`): a clause
+  node Docling buried under the WRONG clause (DIN 3.24 — and 3.26 inside it —
+  under 3.23) is pulled back to the flat list before `nest_by_clause`, so the
+  compliance TREE now reflects clause numbering, completing what the
+  numbering-gate inventory guard only tolerated. A running-context refinement
+  (0.11.1) also reaches clause nodes inside stray top-level NON-clause
+  containers mid-clause-run (the real DIN 3.26 chain: a "(en: final slope)"
+  section holding it) while leaving TOC entries — which legitimately carry
+  clause numbers before any clause opens — untouched. Verified: every DIN 3.2x
+  definition is now a proper depth-1 sibling.
+- Suite: GLM-OCR off by default in tests (2.5 GB VLM); wiring covered by
+  monkeypatched tests + an opt-in real-inference smoke test (runs where the
+  weights are cached).
+
+### Added — Wave 3: equation richness, gate completeness, identity (0.10.0)
+
+Two planning-time investigations reshaped this wave (both recorded in the plan):
+
+- **Docling equation LaTeX is valid, not garble (T9).** The reference's "Docling
+  flattens formulas to garbled text; never accept its version" describes
+  *pre-enrichment* Docling. Verified: current CodeFormula enrichment emits proper
+  structured LaTeX (`N_{\text{d}} = 2\ B_{\text{e}} \times T_{\text{a}}`). So the
+  original "demote latex → rendered_text and quarantine every equation" would
+  have *discarded good data*. Instead `canon_equation` now **keeps** the LaTeX
+  and enriches it: `extract_defines` (the LHS definiendum), a `symbol_table`
+  inventory, and the producing engine tagged in `Node.parsers`
+  (`docling_formula`) so equation consensus activates when MinerU is added.
+  `ownership.yaml` + the equation gate wording corrected: Docling owns the
+  equation lane; **MinerU is the registered deferred corroborator, not a
+  prerequisite**.
+- **Table/figure cross-references resolve now (T10a).** `gates/cross_reference`
+  builds a `(kind, number)` inventory from caption labels ("Bild 1", "Table 11",
+  "Tabelle 46" → (figure,1)/(table,11)/(table,46)) and resolves
+  `XRef(kind in {table,figure})` against it — the spec's flagship "see Table 8
+  where Table 8 was dropped" guard. A fragment-boundary guard suppresses
+  forward references (a ref to a number beyond the highest captured caption is
+  out-of-slice, not a drop). Measured: DIN 3/3, DNVGL 10/10, TL 4/5 resolved
+  with the one out-of-range ref correctly *not* flagged — zero false alarms.
+- **Table mandatory-column check (T10b).** `gates/table_rectangularity` now also
+  quarantines a rectangular table whose limit column (limit-keyword header) has
+  an empty data cell — a compliance comparison against a hole. The units-row
+  consistency sub-check and `computes_limit` (needs a param↔symbol graph /
+  MinerU symbol tables) are deferred with reasons.
+- **Content-addressed identity (T11a).** `app/pipeline/identity.py` re-stamps the
+  random `uuid` node ids with `make_object_id` as the final assembly pass:
+  `standard_id#section_path` for clause nodes (e.g. `DIN EN 60068-2-64#3.22`),
+  `doc_id#sha256(raw_text)[:12]` otherwise. Deterministic (same PDF → same ids,
+  verified), reference-integrity-preserving (`continues_from/to` and
+  `Parameter.source_object_id` remapped through the same old→new map — zero
+  dangling references on a real 201-node doc). `standard_id` is derived
+  conservatively (a designation at the START of a page-1 title, so a prose
+  reference to another standard can't hijack it — DIN resolves to its own
+  designation, title-page-less fragments fall back to the doc hash).
+  `translation_group_id` is deferred (no parallel bilingual gold to validate a
+  linker; DIN's "(en: …)" glosses aren't separate language instances).
+
+Net on the eval corpus: gate quarantines stable at 59 (no regression), heading
+recall retained (0.955), table/figure xref resolution added with zero false
+alarms, and every equation keeps its LaTeX + gains `defines`/`symbol_table`.
+
 ### Added — Wave 2: N-version consensus wired into the pipeline (0.9.0)
 
 The consensus engine was built and unit-tested but inert — `Node.consensus`

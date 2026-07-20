@@ -6,5 +6,5 @@ so bumping it is what forces re-processing instead of silently serving stale
 output from an old pipeline version.
 """
 
-PIPELINE_VERSION = "0.9.1"  # Wave 2: text + table-geometry consensus wired; Parameter richness (asymmetric/relative tolerance, range, language-aware decimals)
+PIPELINE_VERSION = "0.12.0"  # Wave 4 cont.: MinerU/UniMERNet (equation) + Surya (scanned-OCR) as opt-in N-version corroborators alongside GLM-OCR
 SCHEMA_VERSION = "2.0"      # CDM v2 (docs/references/canonical-model.md)

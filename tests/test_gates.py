@@ -141,6 +141,33 @@ def test_table_rectangularity_passes_valid_span():
     assert rep.ok
 
 
+def test_table_rectangularity_quarantines_empty_limit_column_cell():
+    # rectangular grid, but a limit column ("Grenzwert") has a blank data cell
+    cells = [
+        cs.Cell(row=0, col=0, text="Prüfung", is_column_header=True),
+        cs.Cell(row=0, col=1, text="Grenzwert dBµV/m", is_column_header=True),
+        cs.Cell(row=1, col=0, text="RE", header_path=["Prüfung"]),
+        cs.Cell(row=1, col=1, text="", header_path=["Grenzwert dBµV/m"]),  # blank limit
+    ]
+    n = _node(id="t", type="table", cells=cells)
+    rep = gates.table_rectangularity.check(_root([n]))
+    assert rep.root.children[0].consensus == "quarantined"
+    assert "limit column" in (rep.root.children[0].quarantine_reason or "")
+
+
+def test_table_rectangularity_ok_when_nonlimit_column_blank():
+    # a blank in a non-limit column ("Notes") is fine
+    cells = [
+        cs.Cell(row=0, col=0, text="Grenzwert", is_column_header=True),
+        cs.Cell(row=0, col=1, text="Notes", is_column_header=True),
+        cs.Cell(row=1, col=0, text="40", header_path=["Grenzwert"]),
+        cs.Cell(row=1, col=1, text="", header_path=["Notes"]),
+    ]
+    n = _node(id="t", type="table", cells=cells)
+    rep = gates.table_rectangularity.check(_root([n]))
+    assert rep.ok
+
+
 # --- gate 5: modal verb preservation ------------------------------------------
 
 def test_modal_verbs_quarantine_shall_to_should():
@@ -283,6 +310,43 @@ def test_crossref_resolves_present_clause():
     ref = _node(id="p", type="paragraph", text="see 5.4",
                 xrefs=[cs.XRef(kind="clause", text="5.4", target_clause_id="5.4")])
     rep = gates.cross_reference.check(_root([target, ref]))
+    assert rep.ok
+
+
+def test_crossref_resolves_table_ref_against_caption():
+    cap = _node(id="c", type="caption", text="Tabelle 46 - Mobilfunkprüfung")
+    ref = _node(id="p", type="paragraph", text="siehe Tabelle 46",
+                xrefs=[cs.XRef(kind="table", text="Table 46")])
+    rep = gates.cross_reference.check(_root([cap, ref]))
+    assert rep.ok  # "Table 46" xref resolves to the "Tabelle 46" caption
+
+
+def test_crossref_resolves_figure_ref_against_german_caption():
+    cap = _node(id="c", type="caption", text="Bild 1 - Grenzabweichungen")
+    ref = _node(id="p", type="paragraph", text="see Figure 1",
+                xrefs=[cs.XRef(kind="figure", text="Figure 1")])
+    rep = gates.cross_reference.check(_root([cap, ref]))
+    assert rep.ok
+
+
+def test_crossref_quarantines_in_range_dropped_table():
+    # captions 11 and 13 present, "Table 12" referenced but missing -> in-range
+    # drop (the parser lost Table 12)
+    caps = [_node(id="c1", type="caption", text="Table 11 Upper test levels"),
+            _node(id="c2", type="caption", text="Table 13 Cold test")]
+    ref = _node(id="p", type="paragraph", text="see Table 12",
+                xrefs=[cs.XRef(kind="table", text="Table 12")])
+    rep = gates.cross_reference.check(_root(caps + [ref]))
+    assert any(o.object_id == "p" for o in rep.quarantined)
+
+
+def test_crossref_forward_table_ref_out_of_range_not_flagged():
+    # captions up to 48; a ref to Table 49 is a forward ref (out of this slice),
+    # not a drop -> not flagged (fragment-boundary robustness)
+    cap = _node(id="c", type="caption", text="Tabelle 48 - Übersicht")
+    ref = _node(id="p", type="paragraph", text="siehe Tabelle 49",
+                xrefs=[cs.XRef(kind="table", text="Table 49")])
+    rep = gates.cross_reference.check(_root([cap, ref]))
     assert rep.ok
 
 

@@ -76,14 +76,17 @@ from the picker — e.g. before a review session, or on a large corpus — run
 the batch evaluator in the background (see
 [Batch evaluation](#batch-evaluation-run-in-background) below).
 
-To parse one PDF from anywhere (not necessarily under `DOCS_DIR`) and jump
-straight to its inspector:
+To open the document picker for a directory of PDFs (it lists every file under
+the server's `DOCS_DIR` and lets you parse/view each from the browser):
 
 ```bash
-./scripts/start_ui.sh path/to/document.pdf
+./scripts/start_ui.sh path/to/docs-dir
 ```
 
-Or drive it directly:
+The directory must match the `DOCS_DIR` the running server was started against —
+`start_ui.sh` verifies this and refuses to open a mismatched listing rather than
+repointing a live server. To parse a single arbitrary PDF (not necessarily under
+`DOCS_DIR`), POST it directly:
 
 ```bash
 curl -X POST --data-binary @document.pdf http://127.0.0.1:8001/parse
@@ -224,7 +227,8 @@ ingestion-engine ready: device=AcceleratorDevice.AUTO num_threads=8 max_concurre
 `quarantine -> triage -> route -> extract(Docling, OCR auto-routed) ->
 caption_attach -> lattice -> topology -> continuity -> runs backfill ->
 canon.units -> canon.equation -> lang -> classify_type -> parameters ->
-classify.section_role -> nest_by_clause -> xref -> gates -> assemble`.
+classify.section_role -> nest_by_clause -> xref -> table-geometry consensus ->
+text consensus -> gates -> content-addressed identity -> assemble`.
 
 - `triage` measures each page's text-layer quality
   (`DIGITAL_CLEAN`/`DIGITAL_DIRTY`/`SCANNED`/`UNCERTAIN`, PyMuPDF stats) and
@@ -293,19 +297,72 @@ uv run python scripts/verify_extraction.py edition.json   # 0 clean · 1 quarant
 
 ### Parser authority & deferred engines
 
-Text/`runs`/`±`/superscript authority is **PyMuPDF**; section-tree and table
-geometry authority is **Docling**; a third independent table-geometry opinion
-comes from **pdfplumber** (ruling lines) — a table's grid needs all three to
-agree or it quarantines. Two authorities remain **registered-but-deferred**
-swap-ins (heavy/GPU, honored in the architecture without pulling GPU-only deps
-into the offline Mac build): **MinerU** for equations and **Surya 2** for
-scanned OCR — Docling formula-enrichment and RapidOCR fill those lanes today,
-with Surya's 0.95 OCR confidence ceiling already enforced in `consensus.py`.
-The DOCX lane (python-docx / OMML / revision marks) shares the CDM + gates and
-is a later phase. Licensing posture: PyMuPDF & MinerU are AGPL imports and
-Surya weights are conditional-commercial — an offline build with no runtime
-network egress, gated by a licensing allowlist before any deferred engine is
-enabled.
+Text/`runs`/`±`/superscript authority is **PyMuPDF**; section-tree authority is
+**Docling**. Consensus is wired **measurement-first** so it records genuine
+disagreement without flooding the review queue:
+
+- **Text consensus** (`_apply_text_consensus`): only genuine *transcribers* vote
+  (`GENUINE_TEXT_PARSERS = {pymupdf, glm_ocr, rapidocr, mineru, surya}`).
+  Docling's `node.text` is reflow-derived (it prepends clause numbers, flattens
+  subscripts PyMuPDF owns), so it is a recorded corroborator, not a voter —
+  hard-voting it disagreed on 42–92 nodes/doc, all artifacts. Trivially
+  unanimous on born-digital pages; activates to real quarantine on scanned pages
+  once the OCR engines (GLM-OCR, Surya) populate `parsers`.
+- **Table geometry** (`table_geometry.reconcile`): **Docling** (layout) and
+  **pdfplumber** (ruling lines) are the genuine independent voters — they agree
+  on n_rows/n_cols on every clean ruled table and disagree only on ambiguous
+  ones (the merged-cell-collapse guard). **PyMuPDF** word-clustering is an
+  approximate corroborator (multi-line cells inflate its row count), never a
+  hard voter. A genuine third table-structure parser (Camelot) is the deferred
+  swap-in for true three-way.
+- **Equations**: Docling's CodeFormula enrichment emits **valid structured
+  LaTeX** (verified — not the flattened garble the reference's "never accept
+  Docling equations" note assumed, which predates enrichment), so Docling owns
+  the equation lane; `canon_equation` enriches it with `defines`/`symbol_table`.
+
+**GLM-OCR corroborator (live)** — `app/pipeline/engines/glm_ocr.py` runs
+`zai-org/GLM-OCR` (0.9B, MIT weights / Apache-2.0 code, 96.5 UniMERNet formula
+recognition, #1 OmniDocBench v1.5) in-process via plain `transformers`,
+serving BOTH previously-deferred lanes (see
+`../docs/references/ocr-engine-evaluation.md`): a second independent LaTeX
+candidate per equation (disagreement → quarantine with both candidates; the
+comparison folds `\text`/`\mathrm`-style transcription variants but preserves
+genuine glyph differences), and the scanned-page OCR second opinion (RapidOCR
+layer recorded as the `rapidocr` voter; OCR-derived Parameters quarantined by
+default; 0.95 confidence ceiling). Device: `cuda > mps > cpu`
+(`app/pipeline/device.py`, `INGESTION_DEVICE` override); gated by
+`INGESTION_GLM_OCR` (default on) and gracefully unavailable — no weights means
+one log line and the single-parser pipeline, never a crash. Equations also
+carry a browser-renderable **MathML** form (`latex2mathml`) alongside the
+LaTeX source of truth, plus `defines`/`symbol_table`/`computes_limit`, and
+same-clause language instances are linked by `translation_group_id`.
+
+**MinerU + Surya corroborators (out-of-process sidecars)** — the two engines
+named in the reference authority matrix are integrated **alongside** GLM-OCR
+(more independent voters strengthens the N-version cross-check). They run
+out-of-process because their `transformers` pins are mutually incompatible and
+incompatible with docling's (UniMERNet hard-pins `transformers==4.42.4`, Surya
+wants `>=4.51`, docling resolves `5.8.x` — one venv is `uv lock`-unsatisfiable),
+so each runs as an HTTP sidecar in its own environment and the in-repo adapter
+is a thin stdlib client:
+- `app/pipeline/engines/mineru.py` — MinerU's formula stage, **UniMERNet**
+  (`wanderkid/unimernet_base`, Apache-2.0), a third independent equation LaTeX
+  candidate (encoder-decoder, not a VLM). Enable with `INGESTION_MINERU_URL=<url>`.
+- `app/pipeline/engines/surya.py` — **Surya OCR** (Apache-2.0 code;
+  conditional-commercial Rail-M weights), an independent scanned-OCR text
+  candidate. Enable with `INGESTION_SURYA_URL=<url>`.
+Sidecar contract: `POST <url>` raw PNG crop → `{"latex"|"text": "..."}`
+(`_sidecar.py`; `INGESTION_SIDECAR_TIMEOUT`, default 30s). Both degrade
+gracefully (URL unset or sidecar unreachable → one log line, pipeline
+continues), exactly like GLM-OCR without cached weights.
+
+Still deferred: the DOCX lane, per-family clause rulepacks, and the
+licensing-allowlist CI gate (PyMuPDF is AGPL — revisit before the customer
+bundle).
+
+Node ids are **content-addressed** (`identity.py`): `standard_id#section_path`
+for clause-numbered objects (stable across editions when numbering is stable —
+the premise of ID-first alignment), `doc_id#sha256(raw_text)[:12]` otherwise.
 
 ## Evaluating extraction on real documents
 
@@ -377,10 +434,10 @@ the document picker and batch evaluator.
 ## Deferred (tracked, not forgotten)
 
 See `../docs/references/parser-consensus.md` and `../docs/ARCHITECTURE.md`
-§6/§7. Registered-but-deferred consensus **engines** (swapped into the authority
-matrix without a call-site rewrite): **MinerU** equations and **Surya 2**
-scanned OCR (heavy/GPU; Docling formula-enrichment + RapidOCR fill them today),
-and the **DOCX lane** (python-docx / OMML / revision marks, shares CDM + gates).
+§6/§7. The consensus **engines** GLM-OCR (default), MinerU/UniMERNet equations
+and Surya scanned OCR are now wired in (the last two opt-in — see the engines
+section above); still deferred is the **DOCX lane** (python-docx / OMML /
+revision marks, shares CDM + gates).
 Also deferred: the full text-consensus wiring across all parsers (the engine +
 gates are built and unit-tested; only PyMuPDF↔Docling text authority is wired
 into `assemble` so far), the licensing-allowlist CI gate, the full Redis GPU

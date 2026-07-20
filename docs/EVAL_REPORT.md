@@ -1,6 +1,6 @@
 # ingestion-engine eval report
 
-Generated 2026-07-16 04:55 UTC · pipeline_version `0.9.1` · sample dir `data/eval-samples` · seed `1610877652`
+Generated 2026-07-16 23:29 UTC · pipeline_version `0.11.1` · sample dir `data/eval-samples` · seed `1610877652`
 
 Combines the structural benchmark (`app/cli/evaluate_samples.py`), the factual-accuracy scorecard (`app/cli/accuracy_check.py`), and the verification-gate CI check (`scripts/verify_extraction.py`) over the same randomly sampled documents. Regenerate with `uv run python -m app.cli.eval_report`.
 
@@ -38,11 +38,11 @@ Combines the structural benchmark (`app/cli/evaluate_samples.py`), the factual-a
 - exit code: 2 (document-level alarm)
 - objects checked: 101  ·  quarantined: 14  ·  repaired: 0
 - example findings:
-  - `table_rectangularity` [quarantine] ac60576d144f: 1 uncovered cell(s), e.g. [(0, 0)] (dropped cell?)
-  - `units` [quarantine] e4d00507abc1: parameter 'time' has no comparator
-  - `units` [quarantine] 223a2a593195: parameter 'time' has no comparator
-  - `units` [quarantine] 0607edd0c2e4: parameter 'length' has no comparator; parameter 'length' has no comparator; parameter 'length' has no comparator; parameter 'length' has no comparator; parameter 'length' has no comparator; parameter ... [26 more chars]
-  - `units` [quarantine] 89482dd05ced: parameter 'frequency' has no comparator; parameter 'frequency' has no comparator; parameter 'frequency' has no comparator; parameter 'frequency' has no comparator
+  - `table_rectangularity` [quarantine] 65145109d1150e00#e3b0c44298fc~6: 1 uncovered cell(s), e.g. [(0, 0)] (dropped cell?)
+  - `units` [quarantine] 65145109d1150e00#f78b2780cf60: parameter 'time' has no comparator
+  - `units` [quarantine] 65145109d1150e00#c7c56c69d9d3: parameter 'time' has no comparator
+  - `units` [quarantine] 65145109d1150e00#befa2f5be465: parameter 'length' has no comparator; parameter 'length' has no comparator; parameter 'length' has no comparator; parameter 'length' has no comparator; parameter 'length' has no comparator; parameter ... [26 more chars]
+  - `units` [quarantine] 65145109d1150e00#e3b0c44298fc~4: parameter 'frequency' has no comparator; parameter 'frequency' has no comparator; parameter 'frequency' has no comparator; parameter 'frequency' has no comparator
   - ... 9 more
 
 ## DNVGL-CG-0339_Dez_2019_p023-032.pdf
@@ -68,11 +68,11 @@ Combines the structural benchmark (`app/cli/evaluate_samples.py`), the factual-a
 - exit code: 1 (quarantined objects)
 - objects checked: 201  ·  quarantined: 24  ·  repaired: 0
 - example findings:
-  - `table_rectangularity` [quarantine] 220485265a88: 2 uncovered cell(s), e.g. [(1, 0), (1, 1)] (dropped cell?)
-  - `units` [quarantine] 4891e9c42e61: parameter 'temperature' has no comparator; parameter 'length' has no comparator
-  - `units` [quarantine] 0381ec444b07: parameter 'ratio' has no comparator
-  - `units` [quarantine] 66ce1f6f8336: parameter 'temperature' has no comparator; symbol '±' in runs dropped from parameters
-  - `units` [quarantine] b46badde601f: parameter 'ratio' has no comparator; symbol '±' in runs dropped from parameters
+  - `table_rectangularity` [quarantine] 553a2442043ef531#e3b0c44298fc~9: 2 uncovered cell(s), e.g. [(1, 0), (1, 1)] (dropped cell?)
+  - `units` [quarantine] 553a2442043ef531#6502c035d42a: parameter 'temperature' has no comparator; parameter 'length' has no comparator
+  - `units` [quarantine] 553a2442043ef531#c68bfd40189c: parameter 'ratio' has no comparator
+  - `units` [quarantine] 553a2442043ef531#b60512739402: parameter 'temperature' has no comparator; symbol '±' in runs dropped from parameters
+  - `units` [quarantine] 553a2442043ef531#10486622e631: parameter 'ratio' has no comparator; symbol '±' in runs dropped from parameters
   - ... 19 more
 
 ## DIN_EN_60068-2-64-2009_p013-022.pdf
@@ -86,11 +86,11 @@ Combines the structural benchmark (`app/cli/evaluate_samples.py`), the factual-a
 - languages: ['de', 'en'] (primary: de), 160/199 text nodes tagged
 - equations: 3 (3 with LaTeX)
 - runs coverage: 0.7387  ·  CDM types: {'Permission': 5, 'Requirement': 36, 'Recommendation': 5}  ·  parameters extracted: 33
-- consensus: 21 quarantined, 0 majority (incl. table-geometry disagreements)
-- review_required: 21  ·  mean confidence: 0.948
+- consensus: 22 quarantined, 0 majority (incl. table-geometry disagreements)
+- review_required: 22  ·  mean confidence: 0.948
 
 **Accuracy (vs. source text layer)**
-- coverage: mean 0.916, min 0.731  ·  numeric fidelity: 0.839  ·  reading-order tau: 0.964
+- coverage: mean 0.916, min 0.731  ·  numeric fidelity: 0.839  ·  reading-order tau: 0.961
 - headings: 35/40 (0.875)  ·  captions attached: 3/3 (1.0)  ·  table region: 0/0 (1.0)
 - genuine content misses: 8
 
@@ -98,9 +98,9 @@ Combines the structural benchmark (`app/cli/evaluate_samples.py`), the factual-a
 - exit code: 2 (document-level alarm)
 - objects checked: 203  ·  quarantined: 21  ·  repaired: 0
 - example findings:
-  - `numbering` [quarantine] e9a783148fbe: dropped clause(s) ['3.25'] between 3.23 and 3.27 (absent from the whole document)
-  - `numbering` [quarantine] 1c1c9a7a3278: dropped clause(s) ['3.33', '3.34', '3.35', '3.36'] between 3.32 and 3.37 (absent from the whole document)
-  - `units` [quarantine] 3d7031006581: parameter 'current' has no comparator
-  - `units` [quarantine] 36f7760e3e9a: parameter 'current' has no comparator
-  - `units` [quarantine] 878ce5881692: parameter 'frequency' has no comparator; parameter 'frequency' has no comparator
+  - `numbering` [quarantine] DIN EN 60068-2-64#3.26: dropped clause(s) ['3.25'] between 3.24 and 3.26 (absent from the whole document)
+  - `numbering` [quarantine] DIN EN 60068-2-64#3.37: dropped clause(s) ['3.33', '3.34', '3.35', '3.36'] between 3.32 and 3.37 (absent from the whole document)
+  - `units` [quarantine] DIN EN 60068-2-64#3.24: parameter 'current' has no comparator
+  - `units` [quarantine] DIN EN 60068-2-64#3.28: parameter 'current' has no comparator
+  - `units` [quarantine] 177d792c4782bfe7#1418e4ad10e3: parameter 'frequency' has no comparator; parameter 'frequency' has no comparator
   - ... 16 more
