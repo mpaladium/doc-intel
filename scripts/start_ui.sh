@@ -55,10 +55,22 @@ fi
 picker_url="${BASE_URL}/"
 echo "[start_ui] document picker: ${picker_url}"
 
-if command -v open >/dev/null 2>&1; then
-  open "${picker_url}"          # macOS
-elif command -v xdg-open >/dev/null 2>&1; then
-  xdg-open "${picker_url}"      # Linux desktop
+# xdg-open needs a running display server (X11/Wayland); a headless Linux box
+# (a bare SSH session, a server, a container) has neither, and calling it
+# anyway just surfaces a raw "no DISPLAY" error. Detect that up front and fall
+# straight back to printing the URL -- this script's job is to locate/verify
+# the picker, launching a local browser is a best-effort convenience on top.
+_has_display() {
+  [[ -n "${DISPLAY:-}" || -n "${WAYLAND_DISPLAY:-}" ]]
+}
+
+if [[ "$(uname -s)" == "Darwin" ]] && command -v open >/dev/null 2>&1; then
+  open "${picker_url}"                                    # macOS
+elif _has_display && command -v xdg-open >/dev/null 2>&1; then
+  xdg-open "${picker_url}" >/dev/null 2>&1 &               # Linux desktop
+elif command -v xdg-open >/dev/null 2>&1 || command -v open >/dev/null 2>&1; then
+  echo "[start_ui] no display detected -- open this URL manually (or from your local machine): ${picker_url}"
+  echo "[start_ui] SSH'd in? forward the port instead: ssh -L ${PORT}:localhost:${PORT} <this-host>"
 else
   echo "[start_ui] open this URL manually: ${picker_url}"
 fi
