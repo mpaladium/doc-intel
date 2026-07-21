@@ -39,11 +39,16 @@ from importlib.metadata import version as pkg_version
 
 from docling.datamodel.accelerator_options import AcceleratorDevice, AcceleratorOptions
 from docling.datamodel.base_models import InputFormat
-from docling.datamodel.pipeline_options import PdfPipelineOptions
+from docling.datamodel.pipeline_options import (
+    PdfPipelineOptions,
+    TableStructureOptions,
+    TableStructureV2Options,
+)
 from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling_core.types.doc import DocItemLabel
 from docling_core.types.io import DocumentStream
 
+from app.version import tableformer_variant
 from canonical_schema import Cell, Node, Provenance
 
 DOCLING_VERSION = pkg_version("docling")
@@ -121,12 +126,36 @@ def _formulas_enabled() -> bool:
     return os.environ.get("INGESTION_FORMULAS", "1").lower() not in ("0", "false", "no")
 
 
+def _table_structure_options():
+    """TableFormer V2 (`docling-project/TableFormerV2`) is the default table
+    structure model. It owns the cell grid this pipeline treats as ground truth
+    for table geometry -- the table-rectangularity gate and every table cell's
+    `bbox`/`header_path` derive from it -- so its structure quality is the
+    ceiling on table fidelity.
+
+    V2 replaces V1's fast/accurate split with a single transformer, so there is
+    no `mode` knob here. `do_cell_matching` stays True (both versions' default):
+    predictions are matched back onto the PDF's own text cells, which is what
+    keeps `Cell.bbox` in real page coordinates for the accuracy evaluator's
+    per-cell overlays rather than model-space guesses.
+
+    V1 stays reachable via `INGESTION_TABLEFORMER=v1` as an escape hatch for a
+    document where V2 regresses. The selection comes from `app.version` (not a
+    second read of the env var) because it also suffixes PIPELINE_VERSION: the
+    two models produce different output, so they must not share a
+    content-address namespace."""
+    if tableformer_variant() == "v1":
+        return TableStructureOptions()
+    return TableStructureV2Options()
+
+
 def build_converter(ocr_enabled: bool = False, formulas: bool | None = None) -> DocumentConverter:
     if formulas is None:
         formulas = _formulas_enabled()
     pipeline_options = PdfPipelineOptions()
     pipeline_options.do_ocr = ocr_enabled
     pipeline_options.do_table_structure = True
+    pipeline_options.table_structure_options = _table_structure_options()
     pipeline_options.do_formula_enrichment = formulas
     pipeline_options.accelerator_options = AcceleratorOptions(
         device=_select_device(), num_threads=_select_num_threads(),

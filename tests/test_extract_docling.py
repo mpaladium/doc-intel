@@ -13,6 +13,7 @@ isn't always populated even for an adjacent caption -- so an "unclaimed"
 caption must still become a correctly-typed node, never silently dropped.
 """
 
+import os
 from types import SimpleNamespace
 
 from docling_core.types.doc import DocItemLabel
@@ -286,3 +287,73 @@ def test_group_container_is_flattened_but_contents_kept():
     section = nodes[0]
     assert [c.type for c in section.children] == ["paragraph"]
     assert section.children[0].text == "para in group"
+
+
+def test_tableformer_v2_is_the_default_table_model(monkeypatch):
+    """Table geometry (cell grid, per-cell bbox, spans) is Docling-owned and is
+    what the rectangularity gate and the evaluator's per-cell overlays read, so
+    which TableFormer builds it is a correctness-relevant choice, not a tuning
+    knob. V2 is the default; V1 stays reachable as an escape hatch."""
+    from docling.datamodel.pipeline_options import (
+        TableStructureOptions, TableStructureV2Options,
+    )
+    from app.pipeline.extract_docling import _table_structure_options
+
+    monkeypatch.delenv("INGESTION_TABLEFORMER", raising=False)
+    assert isinstance(_table_structure_options(), TableStructureV2Options)
+
+    monkeypatch.setenv("INGESTION_TABLEFORMER", "v1")
+    assert isinstance(_table_structure_options(), TableStructureOptions)
+
+    # unknown value falls forward to the default rather than crashing extraction
+    monkeypatch.setenv("INGESTION_TABLEFORMER", "nonsense")
+    assert isinstance(_table_structure_options(), TableStructureV2Options)
+
+
+def test_tableformer_options_reach_the_converter(monkeypatch):
+    """Guard the wiring, not just the helper: a converter built with the default
+    must actually carry the V2 options (a silently-ignored pipeline option would
+    otherwise look identical from the outside)."""
+    from docling.datamodel.base_models import InputFormat
+    from docling.datamodel.pipeline_options import TableStructureV2Options
+    from app.pipeline.extract_docling import build_converter
+
+    monkeypatch.delenv("INGESTION_TABLEFORMER", raising=False)
+    conv = build_converter(ocr_enabled=False, formulas=False)
+    opts = conv.format_to_options[InputFormat.PDF].pipeline_options
+    assert opts.do_table_structure is True
+    assert isinstance(opts.table_structure_options, TableStructureV2Options)
+
+
+def test_tableformer_variant_is_part_of_the_content_address_key():
+    """Regression: INGESTION_TABLEFORMER changes extraction output, so it has to
+    change the artifact-store key too. When it didn't, flipping to v1 silently
+    served the cached v2 editions (an A/B eval run reported byte-identical
+    metrics for both models, and a "reprocessed" document finished in 0.2s)."""
+    import importlib
+    import app.version
+
+    def _version_with(env_value):
+        if env_value is None:
+            os.environ.pop("INGESTION_TABLEFORMER", None)
+        else:
+            os.environ["INGESTION_TABLEFORMER"] = env_value
+        return importlib.reload(app.version).PIPELINE_VERSION
+
+    previous = os.environ.get("INGESTION_TABLEFORMER")
+    try:
+        default_v = _version_with(None)
+        v2_v = _version_with("v2")
+        v1_v = _version_with("v1")
+
+        assert default_v == v2_v, "v2 is the default, so it keeps the bare version"
+        assert v1_v != v2_v, "v1 must not share v2's content-address namespace"
+        assert v1_v.startswith(v2_v)
+        # exactly one "+" in the resulting key, so `sha256(pdf)+version` stays parseable
+        assert "+" not in v1_v
+    finally:
+        if previous is None:
+            os.environ.pop("INGESTION_TABLEFORMER", None)
+        else:
+            os.environ["INGESTION_TABLEFORMER"] = previous
+        importlib.reload(app.version)

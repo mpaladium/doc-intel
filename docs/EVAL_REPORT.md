@@ -1,106 +1,136 @@
 # ingestion-engine eval report
 
-Generated 2026-07-21 18:22 UTC · pipeline_version `0.12.1` · sample dir `data/eval-samples` · seed `1480020808`
+Generated 2026-07-21 19:11 UTC · pipeline_version `0.13.0` · sample dir `data/eval-samples` · seed `4242`
 
 Combines the structural benchmark (`app/cli/evaluate_samples.py`), the factual-accuracy scorecard (`app/cli/accuracy_check.py`), and the verification-gate CI check (`scripts/verify_extraction.py`) over the same randomly sampled documents. Regenerate with `uv run python -m app.cli.eval_report`.
 
 ## Corpus rollup
 
-- Documents: 3  ·  Pages: 34
-- Paragraph coverage (page-weighted mean): 0.9823
-- Heading recall: 82/93 (0.8817)
+- Documents: 4  ·  Pages: 37
+- Paragraph coverage (page-weighted mean): 0.9478
+- Heading recall: 81/86 (0.9419)
 - Formula page recall: 0/0 (1.0)
-- Caption attachment: 31/34 (0.9118)
-- Table-region fidelity: 1763/1767 (0.9977)
-- Gate quarantines / repairs (total): 48 / 2
-- `verify_extraction.py`: 0/3 clean (exit 0), 1 document-level alarm(s) (exit 2)
+- Caption attachment: 14/15 (0.9333)
+- Table-region fidelity: 1505/1523 (0.9882)
+- Gate quarantines / repairs (total): 63 / 0
+- `verify_extraction.py`: 0/4 clean (exit 0), 4 document-level alarm(s) (exit 2)
 
-## DNVGL-CG-0339_Dez_2019_p033-042.pdf
+## TL_81000_2021-09_GER_p033-042.pdf
 
 **Status:** processed · 10 pages · page classes: {'DIGITAL_CLEAN': 10}
 
 **Benchmark (structure)**
-- node types: {'section': 34, 'paragraph': 65, 'table': 11, 'caption': 12, 'note': 3, 'figure': 2, 'list_item': 4} (max depth 4)
-- tables: 11, cells: 162 (142/142 data cells with header_path)
+- node types: {'section': 24, 'figure': 3, 'paragraph': 77, 'caption': 5, 'table': 7, 'note': 2, 'list_item': 4} (max depth 6)
+- tables: 7, cells: 913 (759/842 data cells with header_path)
 - lists: 4 (nested: 0)
-- languages: ['en'] (primary: en), 90/117 text nodes tagged
+- languages: ['de'] (primary: de), 73/111 text nodes tagged
 - equations: 0 (0 with LaTeX)
-- runs coverage: 0.7179  ·  CDM types: {'Requirement': 48, 'Permission': 3}  ·  parameters extracted: 31
-- consensus: 18 quarantined, 4 majority (incl. table-geometry disagreements)
-- review_required: 18  ·  mean confidence: 0.9454
+- runs coverage: 0.7928  ·  CDM types: {'Requirement': 7, 'Recommendation': 1, 'Permission': 5}  ·  parameters extracted: 43
+- consensus: 14 quarantined, 0 majority (incl. table-geometry disagreements)
+- review_required: 14  ·  mean confidence: 0.9463
 
 **Accuracy (vs. source text layer)**
-- coverage: mean 1.0, min 1.0  ·  numeric fidelity: 0.977  ·  reading-order tau: 0.983
-- headings: 33/42 (0.786)  ·  captions attached: 11/12 (0.917)  ·  table region: 468/469 (0.998)
-- genuine content misses: 0
-
-**Verification gates (`verify_extraction.py`)**
-- exit code: 1 (quarantined objects)
-- objects checked: 131  ·  quarantined: 19  ·  repaired: 0
-- example findings:
-  - `continuation` [quarantine] 749b925431d9c856#e3b0c44298fc~1: partial header match with 749b925431d9c856#e3b0c44298fc~2 (50%)
-  - `continuation` [quarantine] 749b925431d9c856#e3b0c44298fc~2: partial header match with 749b925431d9c856#e3b0c44298fc~1 (50%)
-  - `continuation` [quarantine] 749b925431d9c856#e3b0c44298fc~4: partial header match with 749b925431d9c856#e3b0c44298fc~5 (50%)
-  - `continuation` [quarantine] 749b925431d9c856#e3b0c44298fc~5: partial header match with 749b925431d9c856#e3b0c44298fc~4 (50%)
-  - `units` [quarantine] 749b925431d9c856#2454e3e99312: parameter 'power' has no comparator
-  - ... 14 more
-
-## TL_81000_2018-03_p093-106.pdf
-
-**Status:** processed · 14 pages · page classes: {'DIGITAL_CLEAN': 14}
-
-**Benchmark (structure)**
-- node types: {'section': 28, 'paragraph': 23, 'list_item': 40, 'table': 13, 'figure': 3, 'caption': 9, 'equation': 7, 'note': 3} (max depth 4)
-- tables: 13, cells: 450 (398/398 data cells with header_path)
-- lists: 40 (nested: 0)
-- languages: ['de'] (primary: de), 90/109 text nodes tagged
-- equations: 7 (7 with LaTeX)
-- runs coverage: 0.6881  ·  CDM types: {'Requirement': 8, 'Permission': 2}  ·  parameters extracted: 15
-- consensus: 32 quarantined, 5 majority (incl. table-geometry disagreements)
-- review_required: 32  ·  mean confidence: 0.9385
-
-**Accuracy (vs. source text layer)**
-- coverage: mean 0.957, min 0.878  ·  numeric fidelity: 0.949  ·  reading-order tau: 0.964
-- headings: 2/2 (1.0)  ·  captions attached: 9/9 (1.0)  ·  table region: 1031/1032 (0.999)
-- genuine content misses: 1
+- coverage: mean 0.95, min 0.904  ·  numeric fidelity: 0.976  ·  reading-order tau: 0.721
+- headings: 16/16 (1.0)  ·  captions attached: 4/5 (0.8)  ·  table region: 952/967 (0.984)
+- genuine content misses: 6
 
 **Verification gates (`verify_extraction.py`)**
 - exit code: 2 (document-level alarm)
-- objects checked: 126  ·  quarantined: 20  ·  repaired: 0
+- objects checked: 122  ·  quarantined: 12  ·  repaired: 0
 - example findings:
-  - `table_rectangularity` [quarantine] 495be56f90f02565#e3b0c44298fc~7: 6 uncovered cell(s), e.g. [(11, 0), (11, 1), (11, 2), (11, 3), (11, 4)] (dropped cell?)
-  - `units` [quarantine] 495be56f90f02565#c887915f2c01: parameter 'resistance' has no comparator
-  - `units` [quarantine] 495be56f90f02565#5679a8118bd3: parameter 'time' has no comparator
-  - `units` [quarantine] 495be56f90f02565#12d07e51d2b7: parameter 'ratio' has no comparator
-  - `units` [quarantine] 495be56f90f02565#9b18e7fc4b76: parameter 'gain' has no comparator
-  - ... 15 more
+  - `table_rectangularity` [quarantine] c456bde95439c3bd#e3b0c44298fc~6: empty cell in a mandatory limit column (row 8, col 6, header ['Grenzwert U in dB (µV)'])
+  - `table_rectangularity` [quarantine] c456bde95439c3bd#e3b0c44298fc~9: empty cell in a mandatory limit column (row 4, col 9, header ['QP Grenzwert', 'f in kHz 5'])
+  - `units` [quarantine] c456bde95439c3bd#987d2c1d9216: parameter 'frequency' has no comparator
+  - `units` [quarantine] c456bde95439c3bd#7904c58c7645: parameter 'length' has no comparator
+  - `units` [quarantine] c456bde95439c3bd#6d18a78754f2: parameter 'length' has no comparator
+  - ... 7 more
 
-## DNVGL-CG-0339_Nov_2016_p023-032.pdf
+## DNVGL-CG-0339_Dez_2019_p043-049.pdf
+
+**Status:** processed · 7 pages · page classes: {'DIGITAL_CLEAN': 7}
+
+**Benchmark (structure)**
+- node types: {'section': 20, 'figure': 1, 'caption': 1, 'paragraph': 51, 'equation': 1, 'list_item': 46, 'table': 1} (max depth 4)
+- tables: 1, cells: 7 (0/6 data cells with header_path)
+- lists: 46 (nested: 0)
+- languages: ['en'] (primary: en), 85/118 text nodes tagged
+- equations: 1 (1 with LaTeX)
+- runs coverage: 0.8305  ·  CDM types: {'Requirement': 6, 'Permission': 5, 'Scope': 1, 'Recommendation': 2}  ·  parameters extracted: 5
+- consensus: 8 quarantined, 0 majority (incl. table-geometry disagreements)
+- review_required: 8  ·  mean confidence: 0.9488
+
+**Accuracy (vs. source text layer)**
+- coverage: mean 1.0, min 1.0  ·  numeric fidelity: 1.0  ·  reading-order tau: 1.0
+- headings: 21/21 (1.0)  ·  captions attached: 1/1 (1.0)  ·  table region: 77/77 (1.0)
+- genuine content misses: 0
+
+**Verification gates (`verify_extraction.py`)**
+- exit code: 2 (document-level alarm)
+- objects checked: 121  ·  quarantined: 6  ·  repaired: 0
+- example findings:
+  - `numbering` [quarantine] 53f22bc481b31a29#1: non-increasing sibling numbering: 16 then 1
+  - `units` [quarantine] 53f22bc481b31a29#848f0e358f17: parameter 'length' has no comparator
+  - `units` [quarantine] 53f22bc481b31a29#7c50c891ce60: parameter 'voltage' has no comparator; parameter 'voltage' has no comparator; parameter 'voltage' has no comparator; parameter 'voltage' has no comparator
+  - `cross_reference` [quarantine] 53f22bc481b31a29#6c1857ea7658: unresolved internal reference(s) ['Table 2'] -- referenced object missing (document-level extraction alarm)
+  - `cross_reference` [quarantine] 53f22bc481b31a29#0fb988b3009f: unresolved internal reference(s) ['Figure 4'] -- referenced object missing (document-level extraction alarm)
+  - ... 1 more
+
+## DIN_EN_60068-2-64-2009_p013-022.pdf
 
 **Status:** processed · 10 pages · page classes: {'DIGITAL_CLEAN': 10}
 
 **Benchmark (structure)**
-- node types: {'section': 54, 'figure': 3, 'caption': 13, 'paragraph': 90, 'list_item': 8, 'table': 11, 'note': 1} (max depth 5)
-- tables: 11, cells: 115 (91/91 data cells with header_path)
-- lists: 8 (nested: 0)
-- languages: ['en'] (primary: en), 100/165 text nodes tagged
-- equations: 0 (0 with LaTeX)
-- runs coverage: 0.6788  ·  CDM types: {'Requirement': 49, 'Permission': 2}  ·  parameters extracted: 15
-- consensus: 8 quarantined, 3 majority (incl. table-geometry disagreements)
-- review_required: 8  ·  mean confidence: 0.9464
+- node types: {'section': 50, 'paragraph': 114, 'list_item': 30, 'figure': 3, 'caption': 3, 'equation': 3} (max depth 6)
+- tables: 0, cells: 0 (0/0 data cells with header_path)
+- lists: 30 (nested: 0)
+- languages: ['de', 'en'] (primary: de), 160/199 text nodes tagged
+- equations: 3 (3 with LaTeX)
+- runs coverage: 0.7387  ·  CDM types: {'Permission': 5, 'Requirement': 36, 'Recommendation': 5}  ·  parameters extracted: 16
+- consensus: 13 quarantined, 0 majority (incl. table-geometry disagreements)
+- review_required: 13  ·  mean confidence: 0.948
 
 **Accuracy (vs. source text layer)**
-- coverage: mean 1.0, min 1.0  ·  numeric fidelity: 0.948  ·  reading-order tau: 0.987
-- headings: 47/49 (0.959)  ·  captions attached: 11/13 (0.846)  ·  table region: 264/266 (0.992)
-- genuine content misses: 0
+- coverage: mean 0.916, min 0.731  ·  numeric fidelity: 0.839  ·  reading-order tau: 0.961
+- headings: 35/40 (0.875)  ·  captions attached: 3/3 (1.0)  ·  table region: 0/0 (1.0)
+- genuine content misses: 8
 
 **Verification gates (`verify_extraction.py`)**
-- exit code: 1 (quarantined objects)
-- objects checked: 180  ·  quarantined: 9  ·  repaired: 0
+- exit code: 2 (document-level alarm)
+- objects checked: 203  ·  quarantined: 12  ·  repaired: 0
 - example findings:
-  - `table_rectangularity` [quarantine] 696ed3d93c901d7f#e3b0c44298fc~7: 2 uncovered cell(s), e.g. [(1, 0), (1, 1)] (dropped cell?)
-  - `continuation` [quarantine] 696ed3d93c901d7f#e3b0c44298fc~12: partial header match with 696ed3d93c901d7f#e3b0c44298fc~13 (50%)
-  - `continuation` [quarantine] 696ed3d93c901d7f#e3b0c44298fc~13: partial header match with 696ed3d93c901d7f#e3b0c44298fc~12 (50%)
-  - `units` [quarantine] 696ed3d93c901d7f#78e800fba870: parameter 'temperature' has no comparator
-  - `units` [quarantine] 696ed3d93c901d7f#e3b0c44298fc~7: parameter 'resistance' has no comparator; parameter 'resistance' has no comparator; parameter 'resistance' has no comparator; parameter 'resistance' has no comparator
-  - ... 4 more
+  - `numbering` [quarantine] DIN EN 60068-2-64#3.26: dropped clause(s) ['3.25'] between 3.24 and 3.26 (absent from the whole document)
+  - `numbering` [quarantine] DIN EN 60068-2-64#3.37: dropped clause(s) ['3.33', '3.34', '3.35', '3.36'] between 3.32 and 3.37 (absent from the whole document)
+  - `units` [quarantine] 177d792c4782bfe7#1418e4ad10e3: parameter 'frequency' has no comparator; parameter 'frequency' has no comparator
+  - `units` [quarantine] 177d792c4782bfe7#fb0a4c5a522a: parameter 'frequency' has no comparator; parameter 'frequency' has no comparator; parameter 'gain' has no comparator; parameter 'ratio' has no comparator; parameter 'gain' has no comparator
+  - `units` [quarantine] 177d792c4782bfe7#c3d501c1940c: parameter 'gain' has no comparator; parameter 'gain' has no comparator
+  - ... 7 more
+
+## TL_81000_2021-09_GER_p013-022.pdf
+
+**Status:** processed · 10 pages · page classes: {'DIGITAL_CLEAN': 10}
+
+**Benchmark (structure)**
+- node types: {'section': 19, 'list_item': 32, 'paragraph': 49, 'figure': 6, 'table': 10, 'caption': 6} (max depth 5)
+- tables: 10, cells: 252 (220/220 data cells with header_path)
+- lists: 32 (nested: 0)
+- languages: ['de'] (primary: de), 100/105 text nodes tagged
+- equations: 0 (0 with LaTeX)
+- runs coverage: 0.8286  ·  CDM types: {'Requirement': 16, 'Recommendation': 3, 'Permission': 2}  ·  parameters extracted: 19
+- consensus: 37 quarantined, 5 majority (incl. table-geometry disagreements)
+- review_required: 37  ·  mean confidence: 0.9439
+
+**Accuracy (vs. source text layer)**
+- coverage: mean 0.941, min 0.878  ·  numeric fidelity: 0.953  ·  reading-order tau: 0.951
+- headings: 9/9 (1.0)  ·  captions attached: 6/6 (1.0)  ·  table region: 476/479 (0.994)
+- genuine content misses: 5
+
+**Verification gates (`verify_extraction.py`)**
+- exit code: 2 (document-level alarm)
+- objects checked: 122  ·  quarantined: 33  ·  repaired: 0
+- example findings:
+  - `units` [quarantine] 906470f6402c2047#bb66da89e825: parameter 'ratio' has no comparator
+  - `units` [quarantine] 906470f6402c2047#c88362ca4c6c: parameter 'length' has no comparator
+  - `units` [quarantine] 906470f6402c2047#0b84a7d42ac0: parameter 'length' has no comparator
+  - `units` [quarantine] 906470f6402c2047#515843845938: parameter 'time' has no comparator
+  - `units` [quarantine] 906470f6402c2047#bb66da89e825~1: parameter 'ratio' has no comparator
+  - ... 28 more

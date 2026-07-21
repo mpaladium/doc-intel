@@ -6,6 +6,46 @@ tag releases yet, so entries are grouped by work session instead of version.
 
 ## Unreleased
 
+### Changed — TableFormer V2 is now the table-structure model (0.13.0)
+
+Docling's table structure stage moves from TableFormer V1 to **V2**
+(`docling-project/TableFormerV2`), set via `PdfPipelineOptions.table_structure_options`
+in `app/pipeline/extract_docling.py`. This model owns the cell grid the rest of
+the pipeline treats as ground truth for table geometry — the
+`table_rectangularity` gate, every `Cell.bbox`/`header_path`, and the accuracy
+evaluator's per-cell overlays all derive from it — so its structure quality is
+the ceiling on table fidelity.
+
+A/B over the same 4 documents (`eval_report --seed 4242 -n 4`), V1 → V2:
+
+- **`table_rectangularity` gate findings: 6 → 2** — the gate fires on
+  incomplete/malformed cell grids ("uncovered cell (dropped cell?)"), so this
+  is the direct measure of the structure improvement.
+- **Total gate quarantines: 72 → 63** (−12.5%).
+- Paragraph coverage 0.9454 → 0.9478; heading recall and caption attachment
+  unchanged (81/86, 14/15 — both are layout-stage metrics V2 doesn't touch).
+- Table-region fidelity reads 0.9947 → 0.9882, but the *matched* count is
+  identical (1505) and only the denominator grows (1513 → 1523): V2 detects
+  ~10 more table-region units rather than losing any matched content.
+
+V2 drops V1's fast/accurate `mode` split (single transformer, no knob).
+`do_cell_matching` stays on, which is what keeps `Cell.bbox` in real page
+coordinates instead of model space. Note V2 runs on CPU when the accelerator
+is MPS (Docling forces that fallback); CUDA and CPU are unaffected.
+
+`INGESTION_TABLEFORMER=v1` restores V1 as an escape hatch for a document where
+V2 regresses.
+
+**The variant is part of the content-address key**: `PIPELINE_VERSION` becomes
+`0.13.0-tfv1` when V1 is selected (`app/version.py`), so the two models never
+share a cache namespace. This was found the hard way — before folding it in,
+an A/B run with `INGESTION_TABLEFORMER=v1` returned the *cached V2* editions
+and reported byte-identical metrics for both models, with a "reprocessed"
+document finishing in 0.2s. `extract_docling` now imports the selection from
+`app.version` rather than re-reading the env var, so the model that gets built
+and the key it is stored under cannot disagree. Regression-tested in
+`tests/test_extract_docling.py`.
+
 ### Fixed — parameters.py prose extraction: three false-Parameter sources flooding the review queue (0.12.1)
 
 The eval's largest quarantine driver, `units: parameter 'X' has no comparator`,

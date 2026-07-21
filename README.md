@@ -234,6 +234,13 @@ practical for a single-process service:
   Linux, MPS on Apple Silicon, and CPU otherwise. Override with
   `INGESTION_DEVICE=cpu|cuda|mps` (e.g. to keep this process off a shared GPU).
   `INGESTION_NUM_THREADS` caps CPU threads (default: `min(cpu_count, 8)`).
+- **Table structure model.** TableFormer **V2** by default — it owns the cell
+  grid everything downstream treats as ground truth (the `table_rectangularity`
+  gate, each `Cell.bbox`/`header_path`, the evaluator's per-cell overlays).
+  `INGESTION_TABLEFORMER=v1` falls back to V1 for a document where V2 regresses.
+  The choice is part of the content-address key (`PIPELINE_VERSION` gains a
+  `-tfv1` suffix), so the two never share a cache namespace and switching always
+  reprocesses. Docling runs V2 on CPU when the accelerator is MPS.
 - **Resident model cache + bounded concurrency.** Docling's layout/table model
   weights are loaded once per process (`get_converter()`, `lru_cache`) instead
   of being rebuilt per request. `INGESTION_MAX_CONCURRENT_PARSES` (default `1`)
