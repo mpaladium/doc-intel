@@ -6,6 +6,38 @@ tag releases yet, so entries are grouped by work session instead of version.
 
 ## Unreleased
 
+### Fixed — parameters.py prose extraction: three false-Parameter sources flooding the review queue (0.12.1)
+
+The eval's largest quarantine driver, `units: parameter 'X' has no comparator`,
+had three independent root causes in `_PARAM`/`_BAND`, all in prose extraction
+(table-cell extraction via `canon_units.py` was already anchored and unaffected):
+
+- **Unit-as-word-prefix false match**: `_PARAM`'s unit alternation had no
+  trailing word boundary, so e.g. "...DNVGL-CP-0203 **may** be used..." matched
+  `value=203, unit=mA` off the first two letters of "may" (any word starting
+  with a unit-prefix letter was at risk after any standard-designation number).
+  Fixed with a trailing `(?!\w)` and a matching leading `(?<!\w)` on the value,
+  closing the same gap for designator numbers glued to a preceding letter.
+- **Soft hyphen (U+00AD) breaks range detection**: a PDF hyphenation-break
+  artifact sitting where the source meant a literal range separator
+  ("3­100 Hz") defeated `_BAND`'s range-hi group, leaving a bare
+  comparator-less `frequency` Parameter instead of a `condition` string.
+  `parse_parameters` now normalizes soft hyphens between digits to real hyphens
+  (elsewhere, dropped — same rationale as `consensus._SOFT_HYPHEN`). Also
+  fixed a related, always-present `_BAND` gap: a unit stated once, covering
+  the whole range ("3-100 Hz"), previously required a unit on both sides.
+- **Standalone leading "± N%"**: wasn't recognized at all — `_TOL` only matched
+  a tolerance immediately *after* a base value, so the ± was silently dropped
+  and the bare number became a comparator-less Parameter (plus a separate gate
+  finding: "symbol '±' ... dropped"). Now emitted range-shaped
+  (`comparator="range", range=(-N, N)`), matching the existing numeric-range
+  representation, with `tolerance` populated so the gate's symbol-survival
+  check sees the ± accounted for.
+
+`PIPELINE_VERSION` → `0.12.1` (extraction output changes for documents
+hitting any of the three patterns). Re-run eval-report to verify the
+`units`-gate quarantine-reason count drops.
+
 ### Changed — `/editions/{id}/ui` is now a visual accuracy evaluator
 
 The verification UI grows from a page-image + confidence-sorted table into a

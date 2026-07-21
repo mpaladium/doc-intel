@@ -218,6 +218,20 @@ def test_units_quarantine_dropped_plusminus():
     assert "±" in (rep.root.children[0].quarantine_reason or "")
 
 
+def test_units_passes_leading_tolerance_range_parameter():
+    # parameters.py's fix for a standalone leading "± 10%" emits
+    # comparator="range" + tolerance populated -- confirm the units gate
+    # accepts this shape and does NOT flag a dropped "±" (it's structurally
+    # encoded via `tolerance`, not lost).
+    runs = [cs.Run(text="± 10%", font="A", size=10)]
+    p = cs.Parameter(name="ratio", unit="%", comparator="range",
+                      range=(Decimal("-10"), Decimal("10")),
+                      tolerance=cs.Tolerance(type="symmetric", value=Decimal("10"), unit="%"))
+    n = _node(id="p", runs=runs, parameters=[p])
+    rep = gates.units.check(_root([n]))
+    assert rep.ok
+
+
 # --- gate 7: equation integrity -----------------------------------------------
 
 def test_equation_quarantine_without_latex():

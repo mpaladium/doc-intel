@@ -6,5 +6,5 @@ so bumping it is what forces re-processing instead of silently serving stale
 output from an old pipeline version.
 """
 
-PIPELINE_VERSION = "0.12.0"  # Wave 4 cont.: MinerU/UniMERNet (equation) + Surya (scanned-OCR) as opt-in N-version corroborators alongside GLM-OCR
+PIPELINE_VERSION = "0.12.1"  # parameters.py prose extraction accuracy: unit-match word boundary, soft-hyphen range separator, standalone leading ± tolerance
 SCHEMA_VERSION = "2.0"      # CDM v2 (docs/references/canonical-model.md)

@@ -52,16 +52,23 @@ _TOL = (
 # ("10 - 15 V/m", "10 to 15 V/m"). The range upper bound is captured only when
 # it precedes the unit (so a frequency band "80 MHz - 1 GHz", unit after each
 # number, is NOT read as a range -- it stays a condition, handled by _BAND).
+# A leading standalone "± N unit" (no base value before it) is also captured via
+# the `lead` group and emitted as a range-shaped parameter (see parse_parameters).
+# Word boundaries: (?<!\w) blocks values glued to preceding letters ("item14 Hz"),
+# (?!\w) blocks units matching as prefixes of unrelated words ("DNVGL-CP-0203 may").
 _PARAM = re.compile(
-    rf"(?P<sym>[<>≤≥]|<=|>=)?\s*(?P<value>{_NUM})"
+    rf"(?:(?P<lead>±)\s*)?"
+    rf"(?P<sym>[<>≤≥]|<=|>=)?\s*(?<!\w)(?P<value>{_NUM})"
     rf"(?:\s*{_TOL})?"
     rf"(?:\s*(?:[-–—]|to|bis)\s*(?P<hi>{_NUM}))?"
-    rf"\s*(?P<unit>{_UNIT_ALT})",
+    rf"\s*(?P<unit>{_UNIT_ALT})(?!\w)",
     re.IGNORECASE,
 )
-# a frequency band condition: "80 MHz - 1 GHz", "80 MHz to 1 GHz".
+# a frequency band condition: "80 MHz - 1 GHz", "80 MHz to 1 GHz", "3-100 Hz".
+# The unit on the first number is now optional so "3-100 Hz" (unit stated once,
+# at the end, covering the whole range) matches same as "80 MHz to 1 GHz".
 _BAND = re.compile(
-    rf"{_NUM}\s*(?:Hz|kHz|MHz|GHz)\s*(?:[-–—]|to|bis|à)\s*{_NUM}\s*(?:Hz|kHz|MHz|GHz)",
+    rf"{_NUM}\s*(?:Hz|kHz|MHz|GHz)?\s*(?:[-–—]|to|bis|à)\s*{_NUM}\s*(?:Hz|kHz|MHz|GHz)",
     re.IGNORECASE)
 
 _SYM_COMPARATOR: dict[str, Comparator] = {
@@ -179,6 +186,14 @@ def parse_parameters(text: str, lang: str | None = None,
     """Every explicit value+unit limit in a prose string, as Parameters. The
     condition (frequency band) is shared across the string's parameters -- a
     clause states one band and then its limits."""
+    # PDF hyphenation-break soft hyphens (U+00AD): between two digits, they stood
+    # in for a literal range separator ("3\xad100 Hz" meant "3-100 Hz") -- restore
+    # it as a real hyphen so _BAND/_PARAM's range groups see it. Elsewhere, drop it
+    # (it's an invisible mid-word line-break artifact that offers no meaning to
+    # parameters extraction). Same rationale as consensus._SOFT_HYPHEN handling.
+    text = re.sub(r"(?<=\d)\xad(?=\d)", "-", text)
+    text = text.replace("\xad", "")
+
     band_m = _BAND.search(text)
     condition = re.sub(r"\s+", " ", band_m.group(0)).strip() if band_m else None
 
@@ -194,8 +209,23 @@ def parse_parameters(text: str, lang: str | None = None,
         if band_m and band_m.start() <= m.start("value") < band_m.end():
             continue
         tol = _build_tolerance(m, unit, lang)
-        # a range "10 - 15 unit" -> comparator=range, range=(lo, hi), value=None
         hi = _to_decimal(m.group("hi"), lang) if m.group("hi") else None
+        if m.group("lead") and hi is None:
+            # A standalone leading "± N unit" with no base value before it
+            # ("± 10%") -- a symmetric interval in its own right, not a bare
+            # comparator-less value. Emit range-shaped like "10 - 15 unit",
+            # AND populate `tolerance` so the units gate's ± symbol-survival
+            # check (gates/units.py `_CRITICAL_SYMBOLS`) sees the ± accounted
+            # for structurally, not just dropped.
+            params.append(Parameter(
+                name=_QUANTITY_KIND.get(unit or "", "value"),
+                quantity_kind=_QUANTITY_KIND.get(unit or ""),
+                value=None, unit=unit, raw_unit=m.group("unit"),
+                comparator="range", range=(-value, value),
+                tolerance=Tolerance(type="symmetric", value=value, unit=unit),
+                condition=condition, source_object_id=source_object_id))
+            continue
+        # a range "10 - 15 unit" -> comparator=range, range=(lo, hi), value=None
         if hi is not None:
             params.append(Parameter(
                 name=_QUANTITY_KIND.get(unit or "", "value"),

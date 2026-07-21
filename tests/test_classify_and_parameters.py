@@ -203,6 +203,57 @@ def test_range_parameter():
     assert p.value is None
 
 
+def test_unit_prefix_word_boundary_not_matched():
+    # "DNVGL-CP-0203 may" must not fabricate value=203 unit=mA ("ma" of "may")
+    ps = parameters.parse_parameters(
+        "The Society's document DNVGL-CP-0203 may be used as a guideline.", lang="en")
+    assert ps == []
+
+
+def test_value_glued_to_preceding_letters_not_matched():
+    # a designator number directly glued to a preceding letter is not a value
+    assert parameters.parse_parameters("Model X100 Hz", lang="en") == []
+    assert parameters.parse_parameters("item14 Hz", lang="en") == []
+
+
+def test_soft_hyphen_range_becomes_band_condition_not_bare_value():
+    # U+00AD between digits is a PDF hyphenation-break artifact standing in
+    # for a literal range separator -- must not fabricate a bare frequency
+    # parameter (previously: value=100, unit=Hz, comparator=None)
+    ps = parameters.parse_parameters(
+        "the frequency range 3­100 Hz.", lang="en")
+    assert ps == []
+
+
+def test_band_with_unit_only_on_right_number():
+    # "3-100 Hz" (unit stated once, covering the whole range) is a condition,
+    # same as "80 MHz to 1 GHz" -- previously required a unit on BOTH sides
+    ps = parameters.parse_parameters("limit 40 dBµV/m in the range 3-100 Hz", lang="en")
+    assert len(ps) == 1
+    assert ps[0].value == Decimal("40") and ps[0].condition == "3-100 Hz"
+
+
+def test_leading_standalone_tolerance_becomes_range_not_bare_value():
+    ps = parameters.parse_parameters(
+        "tolerances at the control point: ± 10%, at the attachment point: ± 15%.",
+        lang="en")
+    assert len(ps) == 2
+    assert ps[0].value is None and ps[0].range == (Decimal("-10"), Decimal("10"))
+    assert ps[0].comparator == "range" and ps[0].unit == "%"
+    assert ps[0].tolerance is not None and ps[0].tolerance.value == Decimal("10")
+    assert ps[1].range == (Decimal("-15"), Decimal("15"))
+
+
+def test_leading_tolerance_does_not_regress_trailing_tolerance():
+    # "10 ± 1 %" must still parse as ONE value+tolerance parameter, not be
+    # double-matched by the new leading-± branch
+    ps = parameters.parse_parameters("shall be 10 ± 1 %", lang="en")
+    assert len(ps) == 1
+    assert ps[0].value == Decimal("10")
+    assert ps[0].tolerance is not None and ps[0].tolerance.value == Decimal("1")
+    assert ps[0].range is None
+
+
 def test_german_decimal_comma_is_decimal():
     ps = parameters.parse_parameters("die Feldstärke muss ≤ 0,5 V/m sein", lang="de")
     assert ps[0].value == Decimal("0.5")
