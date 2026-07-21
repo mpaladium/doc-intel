@@ -31,6 +31,7 @@ are covered here):
 from __future__ import annotations
 
 import io
+import math
 import os
 import re
 import uuid
@@ -89,9 +90,29 @@ _CAPTION_LIKE = re.compile(r"^(table|figure|fig\.)\s*\d+", re.IGNORECASE)
 
 # Docling doesn't expose one per-element confidence score for born-digital
 # text (it's not an ML prediction on this path, it's the PDF's own text
-# layer). Fixed high-confidence default, documented so it's the first thing
-# replaced with a real signal (e.g. table-cell/TEDS-derived, OCR confidence)
-# once the OCR/dirty path is built.
+# layer). These stay fixed high-confidence defaults.
+#
+# Docling's own `ConversionResult.confidence` (ConfidenceReport, v2.34.0+) was
+# measured as the replacement and REJECTED for this purpose:
+#   * Of its four components, only `layout_score` is live on the born-digital
+#     path -- `table_score` is unimplemented upstream, `ocr_score` is N/A with
+#     OCR off, and `parse_score` is exactly 1.000 on every page. `mean_score`
+#     therefore averages a near-constant, which is why nearly every page grades
+#     "excellent" even at layout 0.70, and why `mean_grade`/`low_grade` can't
+#     carry a threshold.
+#   * Over 67 pages scored against accuracy_check ground truth, `layout_score`
+#     had r=+0.009 with page coverage (i.e. none) and r=-0.362 with genuine
+#     misses. As a gate it ran precision 0.26-0.31 at recall 3/16-9/16.
+#   * It is per-PAGE, so every element on a page would share one number.
+# Folding that into the field the evaluator's review queue SORTS BY would make
+# that ordering worse than the honest constant. It is captured as inert
+# diagnostics instead (`_page_confidence` -> pipeline_provenance).
+#
+# The real signal for this field remains per-element and still to be built. On
+# the scanned path `ocr_score` does come alive (~0.96-0.98) and is the most
+# promising input, but must be validated against ground truth first --
+# tests/fixtures/make_scanned_pdf.py + `accuracy_check --gold-source` make that
+# free (a born-digital PDF's own text layer is exact OCR truth for its raster).
 _DIGITAL_TEXT_CONFIDENCE = 0.95
 _TABLE_CONFIDENCE = 0.9
 _FIGURE_CONFIDENCE = 0.9  # layout-model detection, not text-layer -- no .text field to read
@@ -452,11 +473,58 @@ def _build_tree(dldoc) -> list[Node]:
     return [n for b in top_sections if (n := b.to_node()) is not None]
 
 
+def _score(value) -> float | None:
+    """A Docling score -> JSON-safe float. NaN (an unimplemented or
+    not-applicable component) becomes None: `float('nan')` serializes as the
+    bare token `NaN`, which is invalid JSON and would break the evaluator's
+    `fetch()` on the edition."""
+    if value is None:
+        return None
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if math.isnan(f) else round(f, 4)
+
+
+def _page_confidence(result) -> dict[str, dict]:
+    """Docling's own per-page `ConfidenceReport` as plain JSON (see
+    `page_confidence` in assemble's pipeline_provenance).
+
+    DIAGNOSTIC ONLY -- deliberately not wired into any gate, consensus state, or
+    `Provenance.confidence`; see the `_DIGITAL_TEXT_CONFIDENCE` note above for
+    the measurements behind that decision."""
+    conf = getattr(result, "confidence", None)
+    pages = getattr(conf, "pages", None) if conf is not None else None
+    if not pages:
+        return {}
+    out: dict[str, dict] = {}
+    for page_no, s in pages.items():
+        grade = getattr(s, "mean_grade", None)
+        out[str(page_no)] = {
+            "layout": _score(getattr(s, "layout_score", None)),
+            "parse": _score(getattr(s, "parse_score", None)),
+            "table": _score(getattr(s, "table_score", None)),
+            "ocr": _score(getattr(s, "ocr_score", None)),
+            "mean_grade": getattr(grade, "value", None),
+        }
+    return out
+
+
+def extract_with_confidence(
+    pdf_bytes: bytes, ocr_enabled: bool = False,
+) -> tuple[list[Node], dict[str, dict]]:
+    """`extract()` plus Docling's per-page confidence report, from the SAME
+    conversion -- the conversion is the expensive part, so the two must not be
+    obtained by converting twice."""
+    converter = get_converter(ocr_enabled)
+    stream = DocumentStream(name="input.pdf", stream=io.BytesIO(pdf_bytes))
+    result = converter.convert(stream)
+    return _build_tree(result.document), _page_confidence(result)
+
+
 def extract(pdf_bytes: bytes, ocr_enabled: bool = False) -> list[Node]:
     """PDF bytes -> top-level list of `Node` (type="section"). I/O layer:
     runs the Docling conversion, then delegates tree-building to
     `_build_tree()`."""
-    converter = get_converter(ocr_enabled)
-    stream = DocumentStream(name="input.pdf", stream=io.BytesIO(pdf_bytes))
-    result = converter.convert(stream)
-    return _build_tree(result.document)
+    return extract_with_confidence(pdf_bytes, ocr_enabled=ocr_enabled)[0]

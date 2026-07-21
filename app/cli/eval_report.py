@@ -227,6 +227,12 @@ def render_markdown(docs_dir: Path, seed: int, results: list[dict], rollup: dict
             f"- consensus: {b['consensus_quarantined']} quarantined, "
             f"{b['consensus_majority']} majority (incl. table-geometry disagreements)",
             f"- review_required: {b['review_required']}  ·  mean confidence: {b['mean_confidence']}",
+            # Docling's own layout confidence: tracked for cross-version drift,
+            # NOT a gate (see extract_docling._DIGITAL_TEXT_CONFIDENCE). Reads
+            # n/a for an edition cached before this field existed.
+            "- docling layout score (diagnostic, not a gate): "
+            + (f"mean {b['docling_layout_score_mean']}, min {b['docling_layout_score_min']}"
+               if b["docling_layout_score_mean"] is not None else "n/a"),
             "",
             "**Accuracy (vs. source text layer)**",
             f"- coverage: mean {a['mean_coverage']}, min {a['min_coverage']}  ·  "

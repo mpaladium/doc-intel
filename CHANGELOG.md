@@ -6,6 +6,59 @@ tag releases yet, so entries are grouped by work session instead of version.
 
 ## Unreleased
 
+### Added — Docling confidence captured as diagnostics, and measured as unusable for gating (0.13.1)
+
+Evaluated Docling's built-in [confidence scores](https://docling-project.github.io/docling/concepts/confidence_scores/)
+(`ConversionResult.confidence`, v2.34.0+) as a replacement for the fixed
+`Provenance.confidence` constants in `extract_docling.py` — the evaluator's
+review queue sorts by that field, so a real signal would be valuable.
+**Measured first, and rejected as a gate.** Three findings:
+
+1. **Most components are dead.** Across the eval samples (born-digital):
+   `table_score` is always NaN (unimplemented upstream), `ocr_score` is NaN with
+   OCR off, and `parse_score` is *exactly* 1.000 on every page. Only
+   `layout_score` varies (0.603–0.940). `mean_score` therefore averages a
+   near-constant, which is why almost every page grades "excellent" even at
+   layout 0.70 — so `mean_grade`/`low_grade` can't carry a threshold, despite
+   being the two fields Docling's docs tell users to focus on.
+2. **The one live score doesn't predict errors.** Over 67 pages scored against
+   `accuracy_check` ground truth: **r=+0.009** with page coverage (none) and
+   r=−0.362 with genuine misses. Pages *with* real misses average layout 0.819
+   vs 0.848 without — a 0.029 gap across a 0.34-wide range. As a gate:
+   **precision 0.26–0.31, recall 3/16–9/16.**
+3. **The OCR path doesn't rescue it.** On an in-memory scanned copy
+   (`make_scanned_pdf.build`), `ocr_score` comes alive (0.961–0.980) but is
+   narrow, while `parse_score` goes NaN. At no point are more than 2 of 4
+   components live, and `mean_score` averages a *different subset* per path, so
+   it isn't comparable across documents.
+
+Gating on this would have manufactured the same false-positive review flood
+just fixed in `parameters.py` (0.12.1). So:
+
+- **`Provenance.confidence` constants are unchanged**, and the stale "first
+  thing replaced with a real signal" comment is replaced with the measurements
+  above so this isn't re-litigated. A page-level score (every element on a page
+  shares one number) that is uncorrelated with per-element correctness would
+  make the review-queue ordering *worse* than the honest constant.
+- **Captured as inert diagnostics**: `extract_with_confidence()` returns
+  Docling's per-page report alongside the tree (same conversion — no second
+  pass), stored under `pipeline_provenance["page_confidence"]`. NaN serializes
+  as `null`, not the bare `NaN` token, which is invalid JSON and would break the
+  evaluator's `fetch()`. A test asserts no gate/consensus code reads the field.
+- **Aggregated per document in the eval report** (`docling layout score
+  (diagnostic, not a gate)`) — the one place a weak signal earns its keep, since
+  per-page noise averages out and a corpus-wide shift flags a model-upgrade
+  regression. (The TableFormer V1→V2 swap landed with no such signal.)
+- `ocr_score` is the component most likely to become useful once the
+  scanned/dirty path is built out, but must be validated against ground truth
+  first — `make_scanned_pdf.py` + `accuracy_check --gold-source` make that free.
+
+`PIPELINE_VERSION` → `0.13.1`: extraction output is unchanged, but the edition
+artifact gains a field, so cached editions must be rebuilt to carry it.
+Verified non-behavioral: re-running the eval report at the same seed after a
+full reprocess reproduced the rollup byte-for-byte (63/0 quarantines,
+1505/1523 table-region fidelity, identical coverage/heading/caption metrics).
+
 ### Changed — TableFormer V2 is now the table-structure model (0.13.0)
 
 Docling's table structure stage moves from TableFormer V1 to **V2**

@@ -266,7 +266,13 @@ text consensus -> gates -> content-addressed identity -> assemble`.
   (`DIGITAL_CLEAN`/`DIGITAL_DIRTY`/`SCANNED`/`UNCERTAIN`, PyMuPDF stats) and
   `route` looks up the extractor priority table (`app/config/ownership.yaml`)
   — both feed confidence/review flags and are recorded in
-  `pipeline_provenance` (`page_classes`, `engine_by_page`). If any page is
+  `pipeline_provenance` (`page_classes`, `engine_by_page`, `page_confidence`).
+  `page_confidence` is Docling's own per-page score set, kept **diagnostic
+  only**: it was measured against `accuracy_check` ground truth and found
+  unusable as a gate (r=+0.009 with page coverage; 0.26–0.31 precision), so
+  nothing branches on it — see the note on `_DIGITAL_TEXT_CONFIDENCE` in
+  `extract_docling.py`. The eval report tracks its document mean to catch
+  model-upgrade drift. If any page is
   `SCANNED`/`UNCERTAIN`, the whole document is re-extracted with Docling's
   RapidOCR enabled (`INGESTION_OCR`, default on) — Docling only actually OCRs
   the pages that need it.

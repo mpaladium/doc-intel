@@ -22,7 +22,7 @@ is stored under can never disagree.
 
 import os
 
-_BASE_PIPELINE_VERSION = "0.13.0"  # TableFormer V2 as the default table-structure model
+_BASE_PIPELINE_VERSION = "0.13.1"  # capture Docling's per-page confidence as diagnostic provenance
 SCHEMA_VERSION = "2.0"             # CDM v2 (docs/references/canonical-model.md)
 
 _TABLEFORMER_V1_ALIASES = frozenset({"v1", "1", "tableformer", "legacy"})

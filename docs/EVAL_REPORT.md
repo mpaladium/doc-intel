@@ -1,6 +1,6 @@
 # ingestion-engine eval report
 
-Generated 2026-07-21 19:11 UTC · pipeline_version `0.13.0` · sample dir `data/eval-samples` · seed `4242`
+Generated 2026-07-21 19:53 UTC · pipeline_version `0.13.1` · sample dir `data/eval-samples` · seed `4242`
 
 Combines the structural benchmark (`app/cli/evaluate_samples.py`), the factual-accuracy scorecard (`app/cli/accuracy_check.py`), and the verification-gate CI check (`scripts/verify_extraction.py`) over the same randomly sampled documents. Regenerate with `uv run python -m app.cli.eval_report`.
 
@@ -28,6 +28,7 @@ Combines the structural benchmark (`app/cli/evaluate_samples.py`), the factual-a
 - runs coverage: 0.7928  ·  CDM types: {'Requirement': 7, 'Recommendation': 1, 'Permission': 5}  ·  parameters extracted: 43
 - consensus: 14 quarantined, 0 majority (incl. table-geometry disagreements)
 - review_required: 14  ·  mean confidence: 0.9463
+- docling layout score (diagnostic, not a gate): mean 0.8403, min 0.7549
 
 **Accuracy (vs. source text layer)**
 - coverage: mean 0.95, min 0.904  ·  numeric fidelity: 0.976  ·  reading-order tau: 0.721
@@ -58,6 +59,7 @@ Combines the structural benchmark (`app/cli/evaluate_samples.py`), the factual-a
 - runs coverage: 0.8305  ·  CDM types: {'Requirement': 6, 'Permission': 5, 'Scope': 1, 'Recommendation': 2}  ·  parameters extracted: 5
 - consensus: 8 quarantined, 0 majority (incl. table-geometry disagreements)
 - review_required: 8  ·  mean confidence: 0.9488
+- docling layout score (diagnostic, not a gate): mean 0.8614, min 0.6052
 
 **Accuracy (vs. source text layer)**
 - coverage: mean 1.0, min 1.0  ·  numeric fidelity: 1.0  ·  reading-order tau: 1.0
@@ -88,6 +90,7 @@ Combines the structural benchmark (`app/cli/evaluate_samples.py`), the factual-a
 - runs coverage: 0.7387  ·  CDM types: {'Permission': 5, 'Requirement': 36, 'Recommendation': 5}  ·  parameters extracted: 16
 - consensus: 13 quarantined, 0 majority (incl. table-geometry disagreements)
 - review_required: 13  ·  mean confidence: 0.948
+- docling layout score (diagnostic, not a gate): mean 0.8765, min 0.6989
 
 **Accuracy (vs. source text layer)**
 - coverage: mean 0.916, min 0.731  ·  numeric fidelity: 0.839  ·  reading-order tau: 0.961
@@ -118,6 +121,7 @@ Combines the structural benchmark (`app/cli/evaluate_samples.py`), the factual-a
 - runs coverage: 0.8286  ·  CDM types: {'Requirement': 16, 'Recommendation': 3, 'Permission': 2}  ·  parameters extracted: 19
 - consensus: 37 quarantined, 5 majority (incl. table-geometry disagreements)
 - review_required: 37  ·  mean confidence: 0.9439
+- docling layout score (diagnostic, not a gate): mean 0.8858, min 0.818
 
 **Accuracy (vs. source text layer)**
 - coverage: mean 0.941, min 0.878  ·  numeric fidelity: 0.953  ·  reading-order tau: 0.951

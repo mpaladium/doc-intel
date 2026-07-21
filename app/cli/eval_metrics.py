@@ -77,6 +77,13 @@ class DocMetrics:
     # per-character runs (the super/subscript-± authority); low coverage on a
     # born-digital doc is itself a signal the backfill isn't reaching content.
     runs_coverage: float = 0.0
+    # Docling's own per-page layout confidence, averaged over the document.
+    # Too weak to gate on per page (r=+0.009 with page coverage -- see
+    # extract_docling._DIGITAL_TEXT_CONFIDENCE), but in aggregate the per-page
+    # noise averages out, so a corpus-wide shift here is a usable early warning
+    # that a Docling/table-model upgrade changed layout quality.
+    docling_layout_score_mean: float | None = None
+    docling_layout_score_min: float | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -157,6 +164,12 @@ def compute_metrics(filename: str, edition: CanonicalEdition) -> DocMetrics:
         m.page_class_counts[cls] = m.page_class_counts.get(cls, 0) + 1
     if m.pages:
         m.uncertain_rate = round(m.page_class_counts.get("UNCERTAIN", 0) / m.pages, 4)
+
+    layout = [p["layout"] for p in (prov.get("page_confidence") or {}).values()
+              if isinstance(p, dict) and p.get("layout") is not None]
+    if layout:
+        m.docling_layout_score_mean = round(sum(layout) / len(layout), 4)
+        m.docling_layout_score_min = round(min(layout), 4)
 
     gates = prov.get("gates", {})
     m.gates_quarantined = gates.get("quarantined", 0)

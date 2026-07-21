@@ -31,7 +31,7 @@ from app.pipeline import (
     canon_equation, canon_units, caption_attach, classify_type, continuity, gates, identity,
     lang, lattice, nested_table, parameters, topology, triage, xref,
 )
-from app.pipeline.extract_docling import DOCLING_VERSION, extract
+from app.pipeline.extract_docling import DOCLING_VERSION, extract_with_confidence
 from app.pipeline.route import Ownership
 from app.pipeline.section_role_classifier import ClassificationContext, RolePack, classify_document
 from app.pipeline.triage import PageClass, TriageResult
@@ -446,7 +446,7 @@ def assemble(pdf_bytes: bytes, source_sha256: str, ocr_enabled: bool = False) ->
     # ocr_enabled=True from the caller always wins even if OCR is gated off.
     ocr_enabled = ocr_enabled or (_ocr_needed(page_classes) and _ocr_permitted())
 
-    top_sections = extract(pdf_bytes, ocr_enabled=ocr_enabled)
+    top_sections, page_confidence = extract_with_confidence(pdf_bytes, ocr_enabled=ocr_enabled)
     top_sections = caption_attach.attach_captions_by_proximity(top_sections)
     top_sections = [_apply_triage(n, page_classes) for n in top_sections]
     top_sections = lattice.reconcile(top_sections)
@@ -562,6 +562,14 @@ def assemble(pdf_bytes: bytes, source_sha256: str, ocr_enabled: bool = False) ->
             "ocr_enabled": ocr_enabled,
             "page_classes": {str(i + 1): tc.page_class for i, tc in enumerate(page_classes)},
             "engine_by_page": engine_by_page,
+            # Docling's own per-page confidence (layout/parse/table/ocr + grade),
+            # DIAGNOSTIC ONLY -- nothing branches on it. Measured against
+            # accuracy_check ground truth and found unusable as a gate
+            # (precision 0.26-0.31; r=+0.009 with page coverage) -- see the
+            # rationale on `_DIGITAL_TEXT_CONFIDENCE` in extract_docling.py. Kept
+            # because it's free (Docling already computes it) and useful in
+            # aggregate for spotting a model-upgrade regression across the corpus.
+            "page_confidence": page_confidence,
             # The admission review queue: how many objects each gate quarantined
             # or repaired. A hard document with zero quarantines is itself a
             # symptom (verification-rules.md "Quarantine is not failure").

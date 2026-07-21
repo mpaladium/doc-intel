@@ -357,3 +357,61 @@ def test_tableformer_variant_is_part_of_the_content_address_key():
         else:
             os.environ["INGESTION_TABLEFORMER"] = previous
         importlib.reload(app.version)
+
+
+def test_page_confidence_is_json_safe_and_nan_becomes_null():
+    """Docling leaves unimplemented/N-A components as NaN. `float('nan')`
+    serializes as the bare token `NaN` -- invalid JSON, which would break the
+    evaluator page's fetch() on the edition. They must come back as None."""
+    import json
+    from app.pipeline.extract_docling import _page_confidence, _score
+
+    assert _score(float("nan")) is None
+    assert _score(None) is None
+    assert _score(0.87654321) == 0.8765
+
+    page = SimpleNamespace(
+        layout_score=0.9048, parse_score=1.0,
+        table_score=float("nan"), ocr_score=float("nan"),
+        mean_grade=SimpleNamespace(value="excellent"),
+    )
+    got = _page_confidence(SimpleNamespace(confidence=SimpleNamespace(pages={1: page})))
+    assert got == {"1": {"layout": 0.9048, "parse": 1.0, "table": None,
+                         "ocr": None, "mean_grade": "excellent"}}
+    assert "NaN" not in json.dumps(got)
+
+    # a Docling version without the confidence field must not break extraction
+    assert _page_confidence(SimpleNamespace()) == {}
+    assert _page_confidence(SimpleNamespace(confidence=None)) == {}
+
+
+def test_page_confidence_is_diagnostic_only_and_never_gated_on():
+    """Guard the decision, not just the data: Docling's confidence measured
+    r=+0.009 against page coverage and 0.26-0.31 precision as a gate, so it is
+    captured as inert provenance. If someone later wires it into a gate or into
+    consensus, this fails and sends them to the measurements first."""
+    from pathlib import Path
+
+    src = Path("app/pipeline")
+    readers = []
+    for path in list((src / "gates").glob("*.py")) + [
+        src / "consensus.py", src / "assemble.py",
+    ]:
+        text = path.read_text()
+        if "page_confidence" not in text:
+            continue
+        # assemble.py is the one legitimate writer (into pipeline_provenance);
+        # anything else touching it, or assemble branching on it, is a gate.
+        for line in text.splitlines():
+            if "page_confidence" not in line or line.strip().startswith("#"):
+                continue
+            is_write = path.name == "assemble.py" and (
+                '"page_confidence": page_confidence' in line
+                or "page_confidence = extract_with_confidence" in line
+                or "top_sections, page_confidence" in line
+            )
+            if not is_write:
+                readers.append(f"{path.name}: {line.strip()}")
+    assert readers == [], (
+        "Docling page_confidence must stay diagnostic-only; found: " + "; ".join(readers)
+    )
