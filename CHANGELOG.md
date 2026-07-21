@@ -6,6 +6,41 @@ tag releases yet, so entries are grouped by work session instead of version.
 
 ## Unreleased
 
+### Fixed — `INGESTION_DEVICE=auto` silently disabled GLM-OCR on every scripted start
+
+`app/pipeline/device.resolve_device()` returned its `INGESTION_DEVICE` override
+verbatim, so the documented default `auto` was handed to torch as a literal
+device string. `.to("auto")` raises `RuntimeError` ("Expected one of cpu, cuda,
+…") — and because the model engines treat a load failure as *unavailable,
+degrade gracefully*, the exception was caught and logged as a warning. Net
+effect: **GLM-OCR silently dropped out of the N-version consensus and the
+pipeline ran single-parser**, on both CUDA and MPS hosts.
+
+This hit the normal path, not an exotic one: `scripts/start_ingestion.sh`
+*exports* `INGESTION_DEVICE=auto` (line 33), so every server started via the
+documented script was affected. It stayed invisible because running a CLI
+directly (`python -m app.cli.eval_report`) leaves the var unset, and then
+resolution probes correctly and GLM-OCR loads — which is why eval runs logged
+`GLM-OCR loaded on mps` while the service did not.
+
+`auto` (and empty/whitespace) now means *probe* — `cuda` > `mps` > `cpu` —
+matching what `extract_docling._select_device()` already did for Docling's own
+accelerator. Explicit pins (`cpu`, `cuda:1`, `mps`) still pass through
+untouched. Covered by `tests/test_device.py`, including an end-to-end assertion
+that whatever is resolved is something torch can actually load a module onto.
+
+### Added — environment variable reference for Mac and Linux, with GPU
+
+New README section documenting all 17 environment variables with their real
+defaults, verified against the code rather than written from memory: paths and
+server, accelerator, and engines/models. Includes what `INGESTION_DEVICE=auto`
+resolves to per host (Linux+NVIDIA / Linux CPU-only / Apple Silicon / Intel
+Mac), GPU sizing guidance for a single 16 GB card, and two platform quirks that
+are upstream behavior rather than settings: **TableFormer V2 runs on CPU when
+the accelerator is MPS** (Docling forces that fallback, so table structure is
+CPU-bound on Apple Silicon), and Docling vs. the model engines resolving the
+device through separate code paths that `INGESTION_DEVICE` drives in common.
+
 ### Added — Docling confidence captured as diagnostics, and measured as unusable for gating (0.13.1)
 
 Evaluated Docling's built-in [confidence scores](https://docling-project.github.io/docling/concepts/confidence_scores/)

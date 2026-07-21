@@ -254,6 +254,94 @@ The startup log line shows what was actually selected:
 ingestion-engine ready: device=AcceleratorDevice.AUTO num_threads=8 max_concurrent_parses=1
 ```
 
+## Environment variables
+
+Every variable is optional — the defaults are the supported configuration on
+both platforms. Values are read at process start (`INGESTION_TABLEFORMER` also
+at import, since it feeds the content-address key), so set them *before*
+launching, not mid-run.
+
+Boolean vars accept `0`/`false`/`no` to disable (case-insensitive); anything
+else, including unset, means enabled.
+
+### Paths and server
+
+| Variable | Default | Notes |
+|---|---|---|
+| `DOCS_DIR` | `./data/docs` | Read-only PDF input volume the picker lists. `scripts/start_ingestion.sh <dir>` sets it from its first argument. |
+| `ARTIFACT_STORE_PATH` | `./data/artifacts` | Content-addressed output store. Safe to delete — it's a cache, everything rebuilds. |
+| `HOST` / `PORT` | `127.0.0.1` / `8001` | Server bind. Scripts only. |
+| `INGESTION_RELOAD` | `0` | Dev auto-restart on source change. Re-runs model warm-up per restart; not for production. |
+| `INGESTION_MAX_CONCURRENT_PARSES` | `1` | Concurrent pipeline runs. The single-process stand-in for a VRAM lease — see GPU sizing below. |
+| `EVAL_DOCS_DIR` / `EVAL_N` / `EVAL_WORKERS` | — / `3` / `1` | Evaluation CLIs only (`scripts/eval_*.sh`, `evaluate_dir.sh`). |
+
+### Accelerator (Mac and Linux, with and without a GPU)
+
+| Variable | Default | Notes |
+|---|---|---|
+| `INGESTION_DEVICE` | `auto` | `auto` **probes**: `cuda` > `mps` > `cpu`. Accepts `cpu`, `cuda`, `cuda:1` (pin one GPU on a multi-GPU box), `mps`. |
+| `INGESTION_NUM_THREADS` | `min(cpu_count, 8)` | CPU threads for CPU-side inference. |
+
+What `auto` actually resolves to:
+
+| Host | Docling (layout/tables/formulas) | Model engines (GLM-OCR) |
+|---|---|---|
+| **Linux + NVIDIA** | `AcceleratorDevice.AUTO` → CUDA | `cuda` |
+| **Linux, no GPU** | → CPU | `cpu` |
+| **Apple Silicon Mac** | → MPS | `mps` |
+| **Intel Mac** | → CPU | `cpu` |
+
+Two platform quirks worth knowing, both upstream behavior, not settings:
+
+- **TableFormer V2 runs on CPU when the accelerator is MPS** — Docling forces
+  that fallback internally. Table structure is therefore CPU-bound on Apple
+  Silicon; CUDA and CPU hosts are unaffected.
+- **Docling and the model engines resolve the device separately**
+  (`extract_docling._select_device()` hands Docling an `AcceleratorDevice`;
+  `app/pipeline/device.resolve_device()` returns a torch device string for
+  GLM-OCR). `INGESTION_DEVICE` drives both, so they can't disagree.
+
+**GPU sizing.** Keep `INGESTION_MAX_CONCURRENT_PARSES=1` on a single 16 GB GPU
+— that's one document resident at a time (Docling layout + table + formula
+models, plus GLM-OCR if it loads). The batch CLI (`app/cli/evaluate_dir.py`)
+has its own `EVAL_WORKERS` limit, so running the server and a batch job
+together on one GPU can still oversubscribe it. To keep this process off a
+shared GPU entirely: `INGESTION_DEVICE=cpu`.
+
+### Engines and models
+
+| Variable | Default | Notes |
+|---|---|---|
+| `INGESTION_TABLEFORMER` | `v2` | `v1` falls back to TableFormer V1. Part of the content-address key (`PIPELINE_VERSION` gains `-tfv1`), so switching always reprocesses. |
+| `INGESTION_OCR` | on | Auto-OCR when triage finds a `SCANNED`/`UNCERTAIN` page. Docling still only OCRs pages that need it. |
+| `INGESTION_FORMULAS` | on | Docling formula enrichment (LaTeX). A per-formula VLM pass — turn off for documents with no maths. The test suite forces this off. |
+| `INGESTION_GLM_OCR` | on | GLM-OCR as a second opinion in the N-version consensus. Degrades gracefully to single-parser if weights are absent. |
+| `INGESTION_MINERU_URL` | unset | MinerU/UniMERNet equation sidecar (e.g. `http://127.0.0.1:8101/predict`). Unset = engine unavailable, pipeline continues. |
+| `INGESTION_SURYA_URL` | unset | Surya OCR sidecar, same contract. |
+| `INGESTION_SIDECAR_TIMEOUT` | `30` | Seconds per sidecar HTTP call. A timeout is treated as "unavailable", never an error. |
+
+MinerU and Surya run **out of process** because their dependency pins conflict
+with Docling's; they get their own GPU/host, so `INGESTION_DEVICE` doesn't
+apply to them. Every model engine is optional by design — if it can't load, the
+pipeline records fewer corroborating parsers rather than failing.
+
+### Examples
+
+```bash
+# Mac dev box, defaults (MPS where supported)
+./scripts/start_ingestion.sh ~/pdfs
+
+# Linux GPU box, pin the second GPU, allow two documents at once
+INGESTION_DEVICE=cuda:1 INGESTION_MAX_CONCURRENT_PARSES=2 \
+  ./scripts/start_ingestion.sh /data/pdfs
+
+# Shared GPU box: stay on CPU entirely
+INGESTION_DEVICE=cpu ./scripts/start_ingestion.sh /data/pdfs
+
+# Fastest structural pass: no formula VLM, no second-opinion OCR
+INGESTION_FORMULAS=0 INGESTION_GLM_OCR=0 ./scripts/start_ingestion.sh /data/pdfs
+```
+
 ## Pipeline
 
 `quarantine -> triage -> route -> extract(Docling, OCR auto-routed) ->

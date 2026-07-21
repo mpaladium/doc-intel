@@ -16,9 +16,18 @@ from functools import lru_cache
 
 @lru_cache(maxsize=1)
 def resolve_device() -> str:
-    """The torch device string every model-backed engine should load onto."""
-    override = os.environ.get("INGESTION_DEVICE")
-    if override:
+    """The torch device string every model-backed engine should load onto.
+
+    "auto" (and an empty value) means *probe*, not a literal device: it's the
+    documented default and `scripts/start_ingestion.sh` exports it explicitly,
+    so it reaches here on a normal server start. Passing it through verbatim
+    made every engine call `.to("auto")`, which raises RuntimeError -- and
+    since engines treat a load failure as "unavailable, degrade gracefully",
+    that silently dropped GLM-OCR from the consensus (single-parser, no error)
+    on both CUDA and MPS boxes whenever the service was started via the script
+    rather than by hand."""
+    override = (os.environ.get("INGESTION_DEVICE") or "").strip()
+    if override and override.lower() != "auto":
         return override
     import torch
     if torch.cuda.is_available():
