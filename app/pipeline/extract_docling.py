@@ -31,12 +31,15 @@ are covered here):
 from __future__ import annotations
 
 import io
+import logging
 import math
 import os
 import re
 import uuid
 from functools import lru_cache
 from importlib.metadata import version as pkg_version
+
+log = logging.getLogger("pipeline.extract_docling")
 
 from docling.datamodel.accelerator_options import AcceleratorDevice, AcceleratorOptions
 from docling.datamodel.base_models import InputFormat
