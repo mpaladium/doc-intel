@@ -56,6 +56,22 @@ HOST=0.0.0.0 PORT=8080 ./scripts/start_ingestion.sh /path/to/pdfs  # bind elsewh
 INGESTION_RELOAD=1 ./scripts/start_ingestion.sh /path/to/pdfs  # dev: auto-restart on source changes
 ```
 
+To bring the **corroborator engines** up at the same time, use the wrapper — it
+starts each sidecar whose environment it finds, validates Ollama-backed GLM-OCR,
+exports only the URLs that actually answered, and prints a status table before
+handing off to the command above:
+
+```bash
+./scripts/start_stack.sh /path/to/pdfs     # engines + server
+./scripts/start_stack.sh --check           # probe and report, start nothing
+./scripts/start_stack.sh --sidecars-only   # engines only (e.g. before evaluate_dir.sh)
+```
+
+A URL that doesn't answer is reported `UNAVAILABLE` and **unset** rather than
+forwarded — `mineru.available()` only checks the variable is set, so a dead URL
+would otherwise read as configured while contributing nothing to consensus. See
+[`deploy/sidecars/README.md`](deploy/sidecars/README.md) for engine setup.
+
 `INGESTION_RELOAD=1` watches source files (excluding `data/`, `.venv/`,
 caches) and restarts the server on change via uvicorn's `--reload`. Each
 restart re-runs the FastAPI lifespan's Docling model warm-up (a few

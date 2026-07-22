@@ -9,6 +9,11 @@
 # directory in the background instead of one-at-a-time from the UI, use
 # scripts/evaluate_dir.sh.
 #
+# This starts the server ALONE, using whatever corroborator engines the
+# environment already points at. To start the sidecars too (and verify each one
+# is genuinely reachable rather than merely configured), use
+# scripts/start_stack.sh, which wraps this script.
+#
 # Usage:
 #   ./scripts/start_ingestion.sh /path/to/pdfs           # http://127.0.0.1:8001
 #   DOCS_DIR=/path/to/pdfs ./scripts/start_ingestion.sh
@@ -47,6 +52,25 @@ fi
 
 echo "[start_ingestion] docs dir:      ${DOCS_DIR}"
 echo "[start_ingestion] artifact store: ${ARTIFACT_STORE_PATH}"
+
+# Report which corroborators are CONFIGURED (env only -- no probing, so this
+# costs nothing and never loads a model). Whether each one is actually reachable
+# is what scripts/start_stack.sh verifies; the engines' own load-time log lines
+# confirm which backend really initialized.
+corroborators=""
+if [[ "${INGESTION_GLM_OCR:-1}" =~ ^(0|false|no)$ ]]; then
+  corroborators="glm_ocr=off"
+elif [[ -n "${INGESTION_GLM_OCR_URL:-}" ]]; then
+  corroborators="glm_ocr=ollama(${INGESTION_GLM_OCR_URL})"
+else
+  corroborators="glm_ocr=in-process"
+fi
+[[ -n "${INGESTION_MINERU_URL:-}" ]] && corroborators="${corroborators} mineru=${INGESTION_MINERU_URL}"
+[[ -n "${INGESTION_SURYA_URL:-}" ]] && corroborators="${corroborators} surya=${INGESTION_SURYA_URL}"
+echo "[start_ingestion] corroborators: ${corroborators}"
+if [[ -z "${INGESTION_MINERU_URL:-}${INGESTION_SURYA_URL:-}" ]]; then
+  echo "[start_ingestion] (no sidecars configured -- ./scripts/start_stack.sh starts and verifies them)"
+fi
 echo "[start_ingestion] serving API + UI on http://${HOST}:${PORT}  (document picker: /)"
 
 # Build the full command as an array and append to it, rather than

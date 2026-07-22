@@ -76,6 +76,28 @@ MAX_CONCURRENT_PARSES = int(os.environ.get("INGESTION_MAX_CONCURRENT_PARSES", "1
 _parse_semaphore = asyncio.Semaphore(MAX_CONCURRENT_PARSES)
 
 
+def _corroborator_config() -> str:
+    """Which N-version corroborators this process is CONFIGURED to use.
+
+    Deliberately reads env only and never calls `engine.available()`: on the
+    in-process backend that would load GLM-OCR's weights at startup, spending
+    VRAM even for documents with no equations. Reachability is what
+    `scripts/start_stack.sh` verifies up front; the engines' own lazy-load lines
+    ("GLM-OCR via ollama at ..." / "GLM-OCR loaded in-process on cuda") confirm
+    which backend actually initialized, on first use."""
+    parts = []
+    if os.environ.get("INGESTION_GLM_OCR", "1").lower() in ("0", "false", "no"):
+        parts.append("glm_ocr=off")
+    elif (url := os.environ.get("INGESTION_GLM_OCR_URL")):
+        model = os.environ.get("INGESTION_GLM_OCR_MODEL", "glm-ocr")
+        parts.append(f"glm_ocr=ollama({url}, {model})")
+    else:
+        parts.append("glm_ocr=in-process")
+    parts.append(f"mineru={os.environ.get('INGESTION_MINERU_URL') or 'unset'}")
+    parts.append(f"surya={os.environ.get('INGESTION_SURYA_URL') or 'unset'}")
+    return "  ".join(parts)
+
+
 @contextlib.asynccontextmanager
 async def _lifespan(_: FastAPI):
     """Load Docling's model weights once at startup (not on the first
@@ -87,6 +109,7 @@ async def _lifespan(_: FastAPI):
     accel = converter.format_to_options[InputFormat.PDF].pipeline_options.accelerator_options
     log.info("ingestion-engine ready: docs_dir=%s device=%s num_threads=%s max_concurrent_parses=%s",
               DOCS_DIR, accel.device, accel.num_threads, MAX_CONCURRENT_PARSES)
+    log.info("corroborator engines: %s", _corroborator_config())
     yield
 
 

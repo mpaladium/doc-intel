@@ -22,6 +22,44 @@ never enter this venv.
 `INGESTION_SIDECAR_TIMEOUT` (default `30`, seconds) bounds every call above,
 including Ollama. A timeout is "no candidate", never an error.
 
+## The one-command path
+
+Once the environments below exist, `scripts/start_stack.sh` brings everything up
+together — it starts each sidecar whose venv it finds, validates Ollama-backed
+GLM-OCR (server reachable *and* model pulled), exports only the URLs that
+actually answered, prints a status table, and then starts the API server:
+
+```bash
+./scripts/start_stack.sh /path/to/pdfs     # everything available + the server
+./scripts/start_stack.sh --check           # probe and report, start nothing
+./scripts/start_stack.sh --sidecars-only   # corroborators only (e.g. before evaluate_dir.sh)
+./scripts/start_stack.sh --no-sidecars /path/to/pdfs
+```
+
+```
+[stack] corroborator status:
+[stack]   glm_ocr  AVAILABLE    ollama http://127.0.0.1:11434 (model glm-ocr, auto-detected)
+[stack]   mineru   AVAILABLE    sidecar http://127.0.0.1:8101 (pid 41234, log ./data/sidecar-logs/…)
+[stack]   surya    UNAVAILABLE  venv /home/x/.venvs/surya not found -- see deploy/sidecars/README.md
+[stack] equation lane: glm_ocr, mineru
+[stack] OCR lane:      glm_ocr  (scanned/uncertain pages only -- idle on a born-digital corpus)
+```
+
+Two behaviours worth knowing, both deliberate:
+
+- **A URL that doesn't answer is unset, not passed through.** `mineru.available()`
+  only checks the variable is *set* (reachability is proven per-call), so
+  forwarding a dead URL would make the engine read as configured while silently
+  contributing nothing. The script would rather report `UNAVAILABLE`.
+- **A failed Ollama auto-detect falls back to in-process quietly; an explicitly
+  configured `INGESTION_GLM_OCR_URL` that fails is reported loudly.** Nothing was
+  asked for in the first case; in the second, you asked for that backend.
+
+Overrides: `MINERU_PORT`/`SURYA_PORT` (8101/8102), `MINERU_VENV`/`SURYA_VENV`
+(the paths below), `OLLAMA_URL`, `INGESTION_GLM_OCR_AUTO=0` to skip the Ollama
+probe, `SIDECAR_START_TIMEOUT` (30s readiness wait). Sidecars the script started
+are stopped when it exits; ones it adopted are left alone.
+
 > **Where the engines are actually used.** The equation lane runs on documents
 > that contain equation nodes; the OCR lane runs **only on `SCANNED`/`UNCERTAIN`
 > pages** (born-digital pages are skipped deliberately — "skip work

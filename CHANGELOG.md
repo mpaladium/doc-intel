@@ -6,6 +6,57 @@ tag releases yet, so entries are grouped by work session instead of version.
 
 ## Unreleased
 
+### Added — `scripts/start_stack.sh`: one command brings up the corroborators and reports what is actually running
+
+Starting the engines was a manual sequence (two venvs, two servers, three env
+vars) with nothing reporting what came up. The new wrapper starts each sidecar
+whose venv it finds, validates Ollama-backed GLM-OCR, exports only the URLs that
+answered, prints a status table, and hands off to `start_ingestion.sh`.
+
+```
+[stack]   glm_ocr  AVAILABLE    ollama http://127.0.0.1:11434 (model glm-ocr, auto-detected)
+[stack]   mineru   AVAILABLE    sidecar http://127.0.0.1:8101 (pid 41234, log ./data/sidecar-logs/…)
+[stack]   surya    UNAVAILABLE  venv /home/x/.venvs/surya not found -- see deploy/sidecars/README.md
+[stack] equation lane: glm_ocr, mineru
+[stack] OCR lane:      glm_ocr  (scanned/uncertain pages only -- idle on a born-digital corpus)
+```
+
+Modes: `--check` (probe and report, start nothing), `--sidecars-only` (engines
+without the API server, e.g. before `evaluate_dir.sh`), `--no-sidecars`. Ports,
+venv paths, `OLLAMA_URL`, `INGESTION_GLM_OCR_AUTO` and `SIDECAR_START_TIMEOUT`
+are all overridable.
+
+Design points that are load-bearing rather than cosmetic:
+
+- **A URL that doesn't answer is unset, not forwarded.** `mineru.available()`
+  only checks the variable is *set* (reachability is proven per-call), so passing
+  a dead URL through would make the engine read as configured while contributing
+  nothing to consensus — the same silent-non-participation class as the
+  `INGESTION_DEVICE=auto` bug. The script probes and reports `UNAVAILABLE`.
+- **The in-process GLM-OCR backend is never probed.** `available()` loads the
+  weights, so a status check would pull a model into a throwaway process and the
+  server would then load it again.
+- **A failed Ollama auto-detect falls back quietly; an explicitly configured
+  `INGESTION_GLM_OCR_URL` that fails is reported loudly.** Nothing was requested
+  in the first case; in the second the operator asked for that backend.
+  Auto-detection is announced when it fires, and `INGESTION_GLM_OCR_AUTO=0`
+  disables it — selecting a backend from ambient state must never be silent.
+- **Teardown kills the process tree.** `start_ingestion.sh` execs `uv run
+  uvicorn` and `uv` spawns the real server as a child, so killing only the
+  launched pid orphaned the uvicorn holding the port. Found while testing; fixed
+  with a `pgrep -P` walk. Relatedly the server runs backgrounded with `wait`
+  rather than in the foreground: bash defers trap handlers until a foreground
+  child exits, which left sidecars running after a signal.
+- Sidecars the script **started** are stopped on exit; ones it **adopted**
+  (already healthy on the port, or preconfigured) are left alone, so re-running
+  it is safe.
+
+`start_ingestion.sh` and the API server's own lifespan now both log the
+corroborator configuration (env only — no probing, no model load), so the stack
+table, the launcher and the server agree. `tests/test_start_stack.py` covers the
+`--check` path end-to-end: bare machine, adoption, dead URL unset, gate-off,
+Ollama-without-the-model, and the scanned-pages-only labelling.
+
 ### Added — GLM-OCR can be served by Ollama; setup recipes for all three corroborator engines
 
 **GLM-OCR now has two interchangeable backends.** It could only be loaded
