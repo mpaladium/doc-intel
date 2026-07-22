@@ -306,3 +306,106 @@ def test_real_glm_ocr_formula_smoke(monkeypatch):
     out = glm_ocr.recognize_formula(img)
     glm_ocr._state.update({"tried": False, "model": None, "processor": None})
     assert out and "E" in out and "m" in out
+
+# --- GLM-OCR via an Ollama server ---------------------------------------------
+
+class _StubOllama(BaseHTTPRequestHandler):
+    """Mimics the two Ollama endpoints this engine uses."""
+    models = ["glm-ocr:latest", "llama3:8b"]
+
+    def do_GET(self):
+        if self.path == "/api/tags":
+            body = json.dumps({"models": [{"name": n} for n in self.models]}).encode()
+            code = 200
+        else:
+            body, code = b"error", 404
+        self.send_response(code); self.end_headers(); self.wfile.write(body)
+
+    def do_POST(self):
+        payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        # the engine must send base64 images and pin determinism
+        assert payload["images"] and isinstance(payload["images"][0], str)
+        assert payload["stream"] is False
+        assert payload["options"]["temperature"] == 0
+        body = json.dumps({"response": f"  {payload['prompt']}|ok  "}).encode()
+        self.send_response(200); self.end_headers(); self.wfile.write(body)
+
+    def log_message(self, *_):
+        pass
+
+
+@pytest.fixture()
+def ollama_url():
+    server = HTTPServer(("127.0.0.1", 0), _StubOllama)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    host, port = server.server_address
+    try:
+        yield f"http://{host}:{port}"
+    finally:
+        server.shutdown()
+
+
+def _reset_glm():
+    from app.pipeline.engines import glm_ocr
+    glm_ocr._state.update({"tried": False, "model": None, "processor": None, "ollama": None})
+
+
+def test_glm_ocr_uses_ollama_when_url_set(monkeypatch, ollama_url):
+    """With INGESTION_GLM_OCR_URL set the engine must talk to Ollama and never
+    import/load the in-process transformers model."""
+    from app.pipeline.engines import glm_ocr
+    monkeypatch.setenv("INGESTION_GLM_OCR", "1")   # conftest gates it off suite-wide
+    monkeypatch.setenv("INGESTION_GLM_OCR_URL", ollama_url)
+    monkeypatch.delenv("INGESTION_GLM_OCR_MODEL", raising=False)
+    _reset_glm()
+    try:
+        assert glm_ocr.available() is True
+        assert glm_ocr._state["model"] is None      # in-process path untouched
+        assert glm_ocr.recognize_formula(_img()) == "Formula Recognition:|ok"
+        assert glm_ocr.recognize_text(_img()) == "Text Recognition:|ok"
+    finally:
+        _reset_glm()
+
+
+def test_glm_ocr_ollama_without_the_model_is_unavailable(monkeypatch, ollama_url):
+    """A reachable Ollama that hasn't pulled glm-ocr must degrade to 'no
+    candidate' -- one log line at startup, not a failure per equation."""
+    from app.pipeline.engines import glm_ocr
+    monkeypatch.setenv("INGESTION_GLM_OCR", "1")
+    monkeypatch.setenv("INGESTION_GLM_OCR_URL", ollama_url)
+    monkeypatch.setenv("INGESTION_GLM_OCR_MODEL", "not-pulled")
+    _reset_glm()
+    try:
+        assert glm_ocr.available() is False
+        assert glm_ocr.recognize_formula(_img()) is None
+    finally:
+        _reset_glm()
+
+
+def test_glm_ocr_ollama_unreachable_is_unavailable(monkeypatch):
+    from app.pipeline.engines import glm_ocr
+    monkeypatch.setenv("INGESTION_GLM_OCR", "1")
+    monkeypatch.setenv("INGESTION_GLM_OCR_URL", "http://127.0.0.1:1")  # nothing listening
+    _reset_glm()
+    try:
+        assert glm_ocr.available() is False
+    finally:
+        _reset_glm()
+
+
+def test_glm_ocr_gate_off_beats_ollama_url(monkeypatch, ollama_url):
+    from app.pipeline.engines import glm_ocr
+    monkeypatch.setenv("INGESTION_GLM_OCR_URL", ollama_url)
+    monkeypatch.setenv("INGESTION_GLM_OCR", "0")
+    _reset_glm()
+    try:
+        assert glm_ocr.available() is False
+    finally:
+        _reset_glm()
+
+
+def test_ollama_url_accepts_root_or_full_endpoint():
+    from app.pipeline.engines._ollama import _generate_url
+    assert _generate_url("http://h:11434") == "http://h:11434/api/generate"
+    assert _generate_url("http://h:11434/") == "http://h:11434/api/generate"
+    assert _generate_url("http://h:11434/api/generate") == "http://h:11434/api/generate"

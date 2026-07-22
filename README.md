@@ -316,14 +316,22 @@ shared GPU entirely: `INGESTION_DEVICE=cpu`.
 | `INGESTION_OCR` | on | Auto-OCR when triage finds a `SCANNED`/`UNCERTAIN` page. Docling still only OCRs pages that need it. |
 | `INGESTION_FORMULAS` | on | Docling formula enrichment (LaTeX). A per-formula VLM pass — turn off for documents with no maths. The test suite forces this off. |
 | `INGESTION_GLM_OCR` | on | GLM-OCR as a second opinion in the N-version consensus. Degrades gracefully to single-parser if weights are absent. |
-| `INGESTION_MINERU_URL` | unset | MinerU/UniMERNet equation sidecar (e.g. `http://127.0.0.1:8101/predict`). Unset = engine unavailable, pipeline continues. |
+| `INGESTION_GLM_OCR_URL` | unset | Serve GLM-OCR from an **Ollama** server (e.g. `http://127.0.0.1:11434`) instead of loading it in-process. Set = the in-process model is never loaded. |
+| `INGESTION_GLM_OCR_MODEL` | `glm-ocr` | Ollama model name, when the above is set. |
+| `INGESTION_MINERU_URL` | unset | MinerU/UniMERNet equation sidecar (e.g. `http://127.0.0.1:8101`). Unset = engine unavailable, pipeline continues. |
 | `INGESTION_SURYA_URL` | unset | Surya OCR sidecar, same contract. |
 | `INGESTION_SIDECAR_TIMEOUT` | `30` | Seconds per sidecar HTTP call. A timeout is treated as "unavailable", never an error. |
 
 MinerU and Surya run **out of process** because their dependency pins conflict
 with Docling's; they get their own GPU/host, so `INGESTION_DEVICE` doesn't
-apply to them. Every model engine is optional by design — if it can't load, the
-pipeline records fewer corroborating parsers rather than failing.
+apply to them (nor does it apply to GLM-OCR when served via Ollama — that
+server picks its own device). Every model engine is optional by design — if it
+can't load, the pipeline records fewer corroborating parsers rather than failing.
+
+**Setup and run instructions for all three engines, plus reference sidecar
+servers, are in [`deploy/sidecars/README.md`](deploy/sidecars/README.md)** —
+including how to verify an engine is genuinely *consumed* rather than merely
+configured (check for its key in `Node.parsers`, not the env var).
 
 ### Examples
 
@@ -457,7 +465,9 @@ disagreement without flooding the review queue:
 
 **GLM-OCR corroborator (live)** — `app/pipeline/engines/glm_ocr.py` runs
 `zai-org/GLM-OCR` (0.9B, MIT weights / Apache-2.0 code, 96.5 UniMERNet formula
-recognition, #1 OmniDocBench v1.5) in-process via plain `transformers`,
+recognition, #1 OmniDocBench v1.5) either **in-process** via plain
+`transformers` or against an **Ollama** server
+([`glm-ocr`](https://ollama.com/library/glm-ocr), set `INGESTION_GLM_OCR_URL`),
 serving BOTH previously-deferred lanes (see
 `../docs/references/ocr-engine-evaluation.md`): a second independent LaTeX
 candidate per equation (disagreement → quarantine with both candidates; the

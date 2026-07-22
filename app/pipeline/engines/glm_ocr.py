@@ -15,11 +15,19 @@ Roles in the consensus architecture (parser-consensus.md):
     RapidOCR's layer, subject to the OCR confidence ceiling; OCR consensus
     activates through GENUINE_TEXT_PARSERS.
 
-Lazy + graceful: the model loads once on first use (resolve_device: cuda > mps
-> cpu); if the weights aren't cached, the architecture isn't supported by the
-installed transformers, or INGESTION_GLM_OCR gates it off, `available()` is
-False and every recognize_* call returns None -- the pipeline stays
-single-parser, never crashes, never blocks.
+Two interchangeable backends, same candidates either way:
+  * IN-PROCESS (default) -- `transformers` in this venv, on resolve_device().
+  * OLLAMA -- set `INGESTION_GLM_OCR_URL` (e.g. http://127.0.0.1:11434) to call
+    a server running https://ollama.com/library/glm-ocr instead. Useful when the
+    GPU box already runs Ollama, or to keep model weights out of this venv.
+    `INGESTION_GLM_OCR_MODEL` overrides the model name (default "glm-ocr").
+    Selected purely by whether the URL is set, so no code change to switch.
+
+Lazy + graceful: the backend initializes once on first use; if the weights
+aren't cached, the architecture isn't supported by the installed transformers,
+the Ollama server is unreachable or lacks the model, or INGESTION_GLM_OCR gates
+it off, `available()` is False and every recognize_* call returns None -- the
+pipeline stays single-parser, never crashes, never blocks.
 
 Determinism: greedy decode (do_sample=False), pinned model id -- same image in,
 same string out (AGENTS/SKILLS model-backed skill rule).
@@ -32,23 +40,34 @@ import os
 import threading
 
 from app.pipeline.device import resolve_device
+from app.pipeline.engines import _ollama
 
 log = logging.getLogger("engines.glm_ocr")
 
 MODEL_ID = "zai-org/GLM-OCR"
 ENGINE_NAME = "glm_ocr"
+OLLAMA_MODEL_DEFAULT = "glm-ocr"
 
 _lock = threading.Lock()
-_state: dict = {"tried": False, "model": None, "processor": None}
+_state: dict = {"tried": False, "model": None, "processor": None, "ollama": None}
 
 
 def _enabled() -> bool:
     return os.environ.get("INGESTION_GLM_OCR", "1").lower() not in ("0", "false", "no")
 
 
+def _ollama_url() -> str | None:
+    """Set => use the Ollama backend instead of loading in-process."""
+    return os.environ.get("INGESTION_GLM_OCR_URL") or None
+
+
+def _ollama_model() -> str:
+    return os.environ.get("INGESTION_GLM_OCR_MODEL") or OLLAMA_MODEL_DEFAULT
+
+
 def _load():
-    """One-time lazy load; failure is remembered so a missing model is one log
-    line, not a retry storm."""
+    """One-time lazy init of whichever backend is configured; failure is
+    remembered so a missing model is one log line, not a retry storm."""
     with _lock:
         if _state["tried"]:
             return
@@ -56,6 +75,16 @@ def _load():
         if not _enabled():
             log.info("GLM-OCR gated off (INGESTION_GLM_OCR)")
             return
+
+        url = _ollama_url()
+        if url:
+            # Probe once: a configured-but-empty Ollama must degrade to "no
+            # candidate" with one clear line, not fail on every equation.
+            if _ollama.reachable(url, _ollama_model(), log):
+                _state["ollama"] = (url, _ollama_model())
+                log.info("GLM-OCR via ollama at %s (model %s)", url, _ollama_model())
+            return
+
         try:
             from transformers import AutoModelForImageTextToText, AutoProcessor
             device = resolve_device()
@@ -63,7 +92,7 @@ def _load():
             model = AutoModelForImageTextToText.from_pretrained(
                 MODEL_ID, dtype="auto").to(device).eval()
             _state["model"], _state["processor"] = model, processor
-            log.info("GLM-OCR loaded on %s", device)
+            log.info("GLM-OCR loaded in-process on %s", device)
         except Exception as exc:  # missing weights / unsupported arch / OOM
             log.warning("GLM-OCR unavailable (%s: %s) -- pipeline continues single-parser",
                         type(exc).__name__, str(exc)[:200])
@@ -71,13 +100,17 @@ def _load():
 
 def available() -> bool:
     _load()
-    return _state["model"] is not None
+    return _state["model"] is not None or _state["ollama"] is not None
 
 
 def _recognize(image, prompt: str, max_new_tokens: int) -> str | None:
     """Run one recognition prompt over a PIL image region. Greedy, offline."""
     if not available():
         return None
+    if _state["ollama"] is not None:
+        url, model_name = _state["ollama"]
+        return _ollama.generate(url, model_name, prompt, image, log,
+                                max_tokens=max_new_tokens)
     import torch
     model, processor = _state["model"], _state["processor"]
     messages = [{"role": "user", "content": [

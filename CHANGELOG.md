@@ -6,6 +6,44 @@ tag releases yet, so entries are grouped by work session instead of version.
 
 ## Unreleased
 
+### Added — GLM-OCR can be served by Ollama; setup recipes for all three corroborator engines
+
+**GLM-OCR now has two interchangeable backends.** It could only be loaded
+in-process via `transformers`; it can now also be driven against an
+[Ollama](https://ollama.com/library/glm-ocr) server by setting
+`INGESTION_GLM_OCR_URL` (plus optional `INGESTION_GLM_OCR_MODEL`, default
+`glm-ocr`). Selection is purely by whether the URL is set — with it set the
+in-process model is never loaded — so switching needs no code change, and the
+GPU box can serve the model it already hosts instead of duplicating weights into
+this venv. `INGESTION_GLM_OCR=0` still disables the engine whichever backend is
+configured.
+
+New `app/pipeline/engines/_ollama.py` is a stdlib-only client, separate from
+`_sidecar.py` because Ollama's protocol genuinely differs (JSON body with
+base64 images on `/api/generate`, answering `{"response": ...}`, versus the
+raw-PNG sidecars). Same graceful-degrade contract: unreachable server, missing
+model, timeout or malformed reply all become "no candidate", never an exception.
+Availability is probed once against `/api/tags` and checks the model is actually
+pulled — a configured-but-empty Ollama produces one clear log line at startup
+rather than a failure per equation. Calls pin `temperature: 0` and a fixed
+`seed`, because consensus has to be reproducible.
+
+**Deployment recipes** — new `deploy/sidecars/`: setup and run instructions for
+GLM-OCR via Ollama, MinerU/UniMERNet, and Surya, plus reference sidecar servers
+(`mineru_server.py`, `surya_server.py`) implementing the documented
+`POST` PNG → `{"latex"|"text": ...}` contract. Both were verified round-tripping
+through the real in-repo adapter with the model layer stubbed, so the HTTP
+contract is known-good independently of the model versions; the version-sensitive
+model-loading block is isolated and flagged in each.
+
+The docs also cover **verifying an engine is consumed rather than merely
+configured** — check for its key in `Node.parsers`, not the env var. Worth
+stating because the two lanes are deliberately selective: equations only fire on
+documents containing equation nodes, and the OCR lane only on
+`SCANNED`/`UNCERTAIN` pages, so on a clean born-digital corpus Surya legitimately
+never runs. Confirmed on the current corpus: GLM-OCR contributes exactly one
+candidate per equation node (3 equations → 3 candidates) and zero elsewhere.
+
 ### Fixed — German captions became false sections; runs authority now guarded; table cells get runs (0.14.0)
 
 Three findings from the Linux evaluation, each verified against the corpus
