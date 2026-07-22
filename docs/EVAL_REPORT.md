@@ -1,6 +1,6 @@
 # ingestion-engine eval report
 
-Generated 2026-07-21 19:53 UTC · pipeline_version `0.13.1` · sample dir `data/eval-samples` · seed `4242`
+Generated 2026-07-22 00:00 UTC · pipeline_version `0.14.0` · sample dir `data/eval-samples` · seed `4242`
 
 Combines the structural benchmark (`app/cli/evaluate_samples.py`), the factual-accuracy scorecard (`app/cli/accuracy_check.py`), and the verification-gate CI check (`scripts/verify_extraction.py`) over the same randomly sampled documents. Regenerate with `uv run python -m app.cli.eval_report`.
 
@@ -10,41 +10,41 @@ Combines the structural benchmark (`app/cli/evaluate_samples.py`), the factual-a
 - Paragraph coverage (page-weighted mean): 0.9478
 - Heading recall: 81/86 (0.9419)
 - Formula page recall: 0/0 (1.0)
-- Caption attachment: 14/15 (0.9333)
+- Caption attachment: 19/24 (0.7917)
 - Table-region fidelity: 1505/1523 (0.9882)
-- Gate quarantines / repairs (total): 63 / 0
-- `verify_extraction.py`: 0/4 clean (exit 0), 4 document-level alarm(s) (exit 2)
+- Gate quarantines / repairs (total): 55 / 2
+- `verify_extraction.py`: 0/4 clean (exit 0), 3 document-level alarm(s) (exit 2)
 
 ## TL_81000_2021-09_GER_p033-042.pdf
 
 **Status:** processed · 10 pages · page classes: {'DIGITAL_CLEAN': 10}
 
 **Benchmark (structure)**
-- node types: {'section': 24, 'figure': 3, 'paragraph': 77, 'caption': 5, 'table': 7, 'note': 2, 'list_item': 4} (max depth 6)
+- node types: {'section': 17, 'figure': 3, 'note': 4, 'paragraph': 77, 'caption': 10, 'table': 7, 'list_item': 4} (max depth 5)
 - tables: 7, cells: 913 (759/842 data cells with header_path)
 - lists: 4 (nested: 0)
 - languages: ['de'] (primary: de), 73/111 text nodes tagged
 - equations: 0 (0 with LaTeX)
-- runs coverage: 0.7928  ·  CDM types: {'Requirement': 7, 'Recommendation': 1, 'Permission': 5}  ·  parameters extracted: 43
-- consensus: 14 quarantined, 0 majority (incl. table-geometry disagreements)
-- review_required: 14  ·  mean confidence: 0.9463
+- runs coverage: 0.8559  ·  CDM types: {'Requirement': 7, 'Recommendation': 1, 'Permission': 5}  ·  parameters extracted: 42
+- consensus: 11 quarantined, 0 majority (incl. table-geometry disagreements)
+- review_required: 11  ·  mean confidence: 0.9463
 - docling layout score (diagnostic, not a gate): mean 0.8403, min 0.7549
 
 **Accuracy (vs. source text layer)**
-- coverage: mean 0.95, min 0.904  ·  numeric fidelity: 0.976  ·  reading-order tau: 0.721
-- headings: 16/16 (1.0)  ·  captions attached: 4/5 (0.8)  ·  table region: 952/967 (0.984)
+- coverage: mean 0.95, min 0.904  ·  numeric fidelity: 0.976  ·  reading-order tau: 0.705
+- headings: 16/16 (1.0)  ·  captions attached: 7/10 (0.7)  ·  table region: 952/967 (0.984)
 - genuine content misses: 6
 
 **Verification gates (`verify_extraction.py`)**
-- exit code: 2 (document-level alarm)
-- objects checked: 122  ·  quarantined: 12  ·  repaired: 0
+- exit code: 1 (quarantined objects)
+- objects checked: 122  ·  quarantined: 11  ·  repaired: 0
 - example findings:
   - `table_rectangularity` [quarantine] c456bde95439c3bd#e3b0c44298fc~6: empty cell in a mandatory limit column (row 8, col 6, header ['Grenzwert U in dB (µV)'])
   - `table_rectangularity` [quarantine] c456bde95439c3bd#e3b0c44298fc~9: empty cell in a mandatory limit column (row 4, col 9, header ['QP Grenzwert', 'f in kHz 5'])
+  - `continuation` [quarantine] c456bde95439c3bd#e3b0c44298fc~9: partial header match with c456bde95439c3bd#e3b0c44298fc~10 (4%)
+  - `continuation` [quarantine] c456bde95439c3bd#e3b0c44298fc~10: partial header match with c456bde95439c3bd#e3b0c44298fc~9 (4%)
   - `units` [quarantine] c456bde95439c3bd#987d2c1d9216: parameter 'frequency' has no comparator
-  - `units` [quarantine] c456bde95439c3bd#7904c58c7645: parameter 'length' has no comparator
-  - `units` [quarantine] c456bde95439c3bd#6d18a78754f2: parameter 'length' has no comparator
-  - ... 7 more
+  - ... 6 more
 
 ## DNVGL-CG-0339_Dez_2019_p043-049.pdf
 
@@ -56,7 +56,7 @@ Combines the structural benchmark (`app/cli/evaluate_samples.py`), the factual-a
 - lists: 46 (nested: 0)
 - languages: ['en'] (primary: en), 85/118 text nodes tagged
 - equations: 1 (1 with LaTeX)
-- runs coverage: 0.8305  ·  CDM types: {'Requirement': 6, 'Permission': 5, 'Scope': 1, 'Recommendation': 2}  ·  parameters extracted: 5
+- runs coverage: 0.8305  ·  CDM types: {'Requirement': 3, 'Permission': 5, 'Scope': 1, 'Recommendation': 2}  ·  parameters extracted: 5
 - consensus: 8 quarantined, 0 majority (incl. table-geometry disagreements)
 - review_required: 8  ·  mean confidence: 0.9488
 - docling layout score (diagnostic, not a gate): mean 0.8614, min 0.6052
@@ -113,28 +113,28 @@ Combines the structural benchmark (`app/cli/evaluate_samples.py`), the factual-a
 **Status:** processed · 10 pages · page classes: {'DIGITAL_CLEAN': 10}
 
 **Benchmark (structure)**
-- node types: {'section': 19, 'list_item': 32, 'paragraph': 49, 'figure': 6, 'table': 10, 'caption': 6} (max depth 5)
+- node types: {'section': 12, 'list_item': 32, 'paragraph': 49, 'figure': 6, 'note': 3, 'table': 10, 'caption': 10} (max depth 5)
 - tables: 10, cells: 252 (220/220 data cells with header_path)
 - lists: 32 (nested: 0)
 - languages: ['de'] (primary: de), 100/105 text nodes tagged
 - equations: 0 (0 with LaTeX)
-- runs coverage: 0.8286  ·  CDM types: {'Requirement': 16, 'Recommendation': 3, 'Permission': 2}  ·  parameters extracted: 19
-- consensus: 37 quarantined, 5 majority (incl. table-geometry disagreements)
-- review_required: 37  ·  mean confidence: 0.9439
+- runs coverage: 0.8952  ·  CDM types: {'Requirement': 16, 'Recommendation': 2, 'Permission': 2}  ·  parameters extracted: 19
+- consensus: 30 quarantined, 5 majority (incl. table-geometry disagreements)
+- review_required: 30  ·  mean confidence: 0.9439
 - docling layout score (diagnostic, not a gate): mean 0.8858, min 0.818
 
 **Accuracy (vs. source text layer)**
-- coverage: mean 0.941, min 0.878  ·  numeric fidelity: 0.953  ·  reading-order tau: 0.951
-- headings: 9/9 (1.0)  ·  captions attached: 6/6 (1.0)  ·  table region: 476/479 (0.994)
+- coverage: mean 0.941, min 0.878  ·  numeric fidelity: 0.953  ·  reading-order tau: 0.949
+- headings: 9/9 (1.0)  ·  captions attached: 8/10 (0.8)  ·  table region: 476/479 (0.994)
 - genuine content misses: 5
 
 **Verification gates (`verify_extraction.py`)**
 - exit code: 2 (document-level alarm)
-- objects checked: 122  ·  quarantined: 33  ·  repaired: 0
+- objects checked: 122  ·  quarantined: 26  ·  repaired: 0
 - example findings:
   - `units` [quarantine] 906470f6402c2047#bb66da89e825: parameter 'ratio' has no comparator
   - `units` [quarantine] 906470f6402c2047#c88362ca4c6c: parameter 'length' has no comparator
   - `units` [quarantine] 906470f6402c2047#0b84a7d42ac0: parameter 'length' has no comparator
   - `units` [quarantine] 906470f6402c2047#515843845938: parameter 'time' has no comparator
   - `units` [quarantine] 906470f6402c2047#bb66da89e825~1: parameter 'ratio' has no comparator
-  - ... 28 more
+  - ... 21 more

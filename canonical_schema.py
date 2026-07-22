@@ -22,6 +22,8 @@ Design notes:
 
 from __future__ import annotations
 
+import re
+import unicodedata
 from decimal import Decimal
 from enum import Enum
 from typing import Literal, Optional
@@ -85,6 +87,40 @@ def reconstruct_raw_text(runs: list[Run]) -> str:
     return "".join(out)
 
 
+_WS_RUN = re.compile(r"\s+")
+# NFKC maps SUPERSCRIPT MINUS (U+207B) to MINUS SIGN (U+2212), NOT to the ASCII
+# hyphen an extractor emits -- so without folding the dash family, "10⁻³" never
+# compares equal to "10-3" and the single most valuable case (a flattened
+# exponent) is silently rejected. Deliberately NOT consensus._DASH_FOLD: that one
+# governs parser-vs-parser comparison, where collapsing a distinction can erase a
+# real disagreement.
+_DASH_FOLD = {ord(c): "-" for c in "−–—―"}
+
+
+def same_text_content(a: str, b: str) -> bool:
+    """Whether two witnesses to the same text say the same thing, ignoring
+    whitespace and vertical alignment. NFKC folds '10⁻³'->'10−3' and 'b⁾'->'b)',
+    the dash fold finishes the job.
+
+    This is the guard for "may I trust the runs-derived `raw_text` here?".
+    `raw_text` is the only witness that preserves super/subscript, but it is
+    reconstructed from runs found by an imprecise bbox query, so it can be
+    INCOMPLETE (measured: a '6 Hz' node whose raw_text was just 'Hz'). Preferring
+    it unconditionally therefore loses data; preferring it only when this holds
+    keeps the fidelity win and drops the loss."""
+    def fold(s: str) -> str:
+        return _WS_RUN.sub("", unicodedata.normalize("NFKC", s).translate(_DASH_FOLD))
+    return fold(a) == fold(b)
+
+
+def preferred_text(raw_text: Optional[str], text: Optional[str]) -> str:
+    """The text a content pass should read: the runs-derived `raw_text` when it
+    corroborates `text` (so super/subscript survives), otherwise `text`."""
+    if raw_text and text and same_text_content(raw_text, text):
+        return raw_text
+    return text or raw_text or ""
+
+
 class Quantity(BaseModel):
     """DEPRECATED in favor of `Parameter` (CDM v2). Retained so existing
     canon.units output stays valid during migration. A cell's surface value;
@@ -142,6 +178,17 @@ class Cell(BaseModel):
     # error, so table geometry requires all three parsers to agree). Empty for
     # single-parser cells.
     parsers: dict[str, Optional[str]] = Field(default_factory=dict)
+    # Per-character formatting inside this cell (assemble._backfill_runs), the
+    # same super/subscript authority `Node.runs` carries for prose -- tables hold
+    # the actual limit values, so "10⁻³" flattening to "10-3" is at its most
+    # expensive here.
+    runs: list[Run] = Field(default_factory=list)
+    # Set ONLY when the runs reconstruct to the same content as `text` and differ
+    # purely by vertical alignment; left None when the two witnesses disagree
+    # structurally (measured: ~20% of cells, dominated by imprecise cell-region
+    # geometry rather than real corruption -- so a mismatch is NOT evidence of a
+    # dropped character and must not be gated on). `text` is never overwritten.
+    raw_text: Optional[str] = None
     # Cell-level provenance (ARCHITECTURE.md §1.9). A table is the one element
     # whose sub-parts can span pages: continuity.stitch merges a continuation
     # table onto the previous page's node, so the node's single provenance.page

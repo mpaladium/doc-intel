@@ -415,3 +415,59 @@ def test_page_confidence_is_diagnostic_only_and_never_gated_on():
     assert readers == [], (
         "Docling page_confidence must stay diagnostic-only; found: " + "; ".join(readers)
     )
+
+
+# --------------------------------------------------------------------------- #
+# Multilingual caption guard + standalone block labels
+# --------------------------------------------------------------------------- #
+def test_german_caption_like_heading_does_not_open_section():
+    """Docling labels "Tabelle 3 - ..." a SectionHeaderItem. Unguarded it opened
+    a section that then ADOPTED the very table it captions. Worse, because
+    gates/cross_reference._caption_inventory only scans type=="caption", every
+    "siehe Tabelle 3" in the document then dangled -- this single English-only
+    regex accounted for 14 spurious sections and 9 quarantines in the German
+    samples."""
+    for text in ("Tabelle 3 - FPSC Luftentladung",
+                 "Bild 4 - Indirekte Entladung",
+                 "Abbildung 12 - Aufbau",
+                 "Tabelle 19 (fortgesetzt)"):
+        nodes = _build_tree(_fake_doc([
+            _section_header("5 Anforderungen"),
+            _section_header(text),
+            _item(DocItemLabel.TABLE),
+        ]))
+        section = nodes[0]
+        kinds = [c.type for c in section.children]
+        assert "caption" in kinds, f"{text!r} should become a caption, got {kinds}"
+        assert all(c.type != "section" for c in section.children), \
+            f"{text!r} must not open a section (got {kinds})"
+
+
+def test_english_caption_guard_still_applies():
+    nodes = _build_tree(_fake_doc([
+        _section_header("5 Requirements"),
+        _section_header("Table 3 - Limits"),
+    ]))
+    assert [c.type for c in nodes[0].children] == ["caption"]
+
+
+def test_legend_block_label_becomes_note_not_section():
+    """"Legende" labels the symbols of the adjacent object. It must not open a
+    section (it was swallowing the following table/figure), but it is not the
+    caption of a numbered object either -- so it becomes a `note`, which also
+    keeps it out of the xref caption inventory."""
+    for text in ("Legende", "Legende:", "Zeichenerklärung", "Legend", "Key"):
+        nodes = _build_tree(_fake_doc([
+            _section_header("5 Anforderungen"),
+            _section_header(text),
+            _item(DocItemLabel.TABLE),
+        ]))
+        kinds = [c.type for c in nodes[0].children]
+        assert "note" in kinds and "section" not in kinds, f"{text!r} -> {kinds}"
+
+
+def test_real_heading_still_opens_a_section():
+    # The guard must not swallow genuine numbered headings.
+    for text in ("5.3.2 Prüfaufbau", "6 Normative references", "Anhang A"):
+        nodes = _build_tree(_fake_doc([_section_header(text)]))
+        assert nodes[0].type == "section" and nodes[0].text == text

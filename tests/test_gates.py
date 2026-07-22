@@ -373,3 +373,35 @@ def test_run_all_threads_and_accumulates():
     rep = gates.run_all(_root([good, bad]))
     assert not rep.ok
     assert any(o.object_id == "bad" for o in rep.quarantined)
+
+
+# --- table-cell run backfill policy -------------------------------------------
+
+def test_same_content_folds_vertical_alignment_only():
+    """The predicate deciding when cell runs may be trusted as the same cell."""
+    from canonical_schema import same_text_content as _same_content
+    # identical modulo super/subscript + spacing -> same cell, enriched
+    assert _same_content("10⁻³ V/m", "10-3 V/m")
+    assert _same_content("100 cm²", "100 cm 2")
+    assert _same_content("5b⁾", "5 b)")
+    # genuinely different content -> NOT the same cell, must not be trusted
+    assert not _same_content("107 - 59,51", "97 - 59,51")
+    assert not _same_content("×lg(f/0,15)", "97 - 59,51 × lg(f/0,15)")
+
+
+def test_cell_backfill_enriches_only_when_content_matches(tmp_path):
+    """Cell runs are recorded as evidence always, but `raw_text` is set ONLY when
+    the two witnesses provably agree modulo vertical alignment. On real corpora
+    ~20% of cell regions reconstruct structurally differently (runs bleeding in
+    from a neighbouring column, or a cell bbox missing its own leading value) --
+    that is imprecise geometry, not dropped characters, so it must never
+    overwrite `text` nor raise a finding."""
+    import canonical_schema as cs
+    from canonical_schema import same_text_content as _same_content
+
+    enrichable = cs.Cell(row=1, col=0, text="100 cm 2")
+    structural = cs.Cell(row=1, col=1, text="97 - 59,51 × lg(f/0,15)")
+    assert _same_content("100 cm²", enrichable.text)
+    assert not _same_content("×lg(f/0,15)", structural.text)
+    # schema defaults: a cell that was never backfilled carries no false authority
+    assert structural.raw_text is None and structural.runs == []

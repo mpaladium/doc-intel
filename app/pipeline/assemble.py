@@ -20,13 +20,15 @@ aggressively"). An explicit `ocr_enabled=True` caller override always wins.
 from __future__ import annotations
 
 import os
+import re
+import unicodedata
 import uuid
 from functools import lru_cache
 from pathlib import Path
 
 import fitz  # PyMuPDF
 
-from canonical_schema import CanonicalEdition, Node, Provenance
+from canonical_schema import CanonicalEdition, Node, Provenance, same_text_content
 from app.pipeline import (
     canon_equation, canon_units, caption_attach, classify_type, continuity, gates, identity,
     lang, lattice, nested_table, parameters, topology, triage, xref,
@@ -134,9 +136,58 @@ def _backfill_runs(top_sections: list[Node], pdf_bytes: bytes) -> list[Node]:
                     page_cache[page_no] = ([], 0.0)
             return page_cache[page_no]
 
+        def backfill_cells(node: Node) -> Node:
+            """Same authority split as prose, applied per table cell -- a cell is
+            where a flattened exponent costs the most (it IS the limit value).
+
+            Conservative by measurement: over 1172 real cells, the runs in a
+            cell's region reconstruct identically for 66%, differ ONLY by
+            super/subscript for ~1%, and differ STRUCTURALLY for ~20% -- the last
+            group dominated by imprecise cell-region geometry (runs bleeding in
+            from a neighbouring column, or a cell bbox not covering its own
+            leading value), not by real transcription loss. So the runs are always
+            recorded as evidence + a `parsers` candidate, `raw_text` is set only
+            when the content provably matches, `text` is never overwritten, and a
+            structural mismatch raises nothing (it would be a false-alarm
+            generator, not a finding)."""
+            out = []
+            for cell in node.cells or []:
+                if not cell.bbox or not cell.page or cell.runs:
+                    out.append(cell)
+                    continue
+                placed, page_h = placed_for(cell.page)
+                if not placed:
+                    out.append(cell)
+                    continue
+                region = runs_mod.docling_bbox_to_topleft(cell.bbox, page_h)
+                cell_runs = runs_mod.runs_in_region(placed, region)
+                if not cell_runs:
+                    out.append(cell)
+                    continue
+                raw = reconstruct_raw_text(cell_runs)
+                update = {
+                    "runs": cell_runs,
+                    "parsers": {**cell.parsers, "pymupdf": raw, "docling": cell.text},
+                }
+                # Enrich ONLY when the runs actually carry vertical-alignment
+                # information. Without this guard, any cell differing merely in
+                # whitespace also qualifies (measured: 360 cells vs 14 real ones)
+                # -- and the runs concatenation drops the space at an internal
+                # line break ("industries. We" -> "industries.We"), so raw_text
+                # would be strictly WORSE than text while now being what
+                # parameters.py reads. No super/subscript => nothing to preserve.
+                if (raw != cell.text
+                        and any(r.vertical_align != "normal" for r in cell_runs)
+                        and same_text_content(raw, cell.text)):
+                    update["raw_text"] = raw
+                out.append(cell.model_copy(update=update))
+            return node.model_copy(update={"cells": out})
+
         def visit(node: Node) -> Node:
             children = [visit(c) for c in node.children]
             node = node.model_copy(update={"children": children})
+            if node.type == "table" and node.cells:
+                return backfill_cells(node)
             if node.type in _RUN_TEXT_TYPES and not node.runs:
                 placed, page_h = placed_for(node.provenance.page)
                 if placed:

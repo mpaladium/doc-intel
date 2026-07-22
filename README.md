@@ -398,6 +398,15 @@ text consensus -> gates -> content-addressed identity -> assemble`.
   superscript the content stream actually has); Docling's transcription is
   recorded as a `parsers` corroborator candidate. This is the only layer that
   can catch `10⁻³ V/m` flattening to `10-3` (which parses as 7).
+  **Table cells get the same treatment** (`Cell.runs` / `Cell.raw_text` /
+  `Cell.parsers`) — a cell *is* the limit value, so a flattened exponent costs
+  most there. Because the runs come from a bbox query that isn't always precise,
+  `raw_text` is only set when it provably says the same thing as `text` (modulo
+  whitespace and vertical alignment) *and* actually carries super/subscript;
+  `text` is never overwritten and a mismatch raises no finding. Content passes
+  read `canonical_schema.preferred_text()`, which falls back to `text` whenever
+  the runs witness doesn't corroborate it — an incomplete `raw_text` must not
+  silently drop a value.
 - `classify_type` assigns the closed **normative CDM type** (`Requirement`/
   `Recommendation`/`Permission`/`Warning`/`Scope`/…) from a per-language modal
   lexicon (`modality.py`; `il convient de` == *should*, never inferred by

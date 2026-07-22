@@ -21,7 +21,7 @@ from __future__ import annotations
 import re
 from decimal import Decimal, InvalidOperation
 
-from canonical_schema import Cell, Comparator, Node, Parameter, Tolerance
+from canonical_schema import Cell, Comparator, Node, Parameter, Tolerance, preferred_text
 from app.pipeline.canon_units import _UNIT_ALT, _normalize_unit, parse_quantity
 
 # unit -> controlled quantity_kind vocabulary (canonical-model.md example
@@ -249,10 +249,16 @@ def _cell_parameter(cell: Cell, source_object_id: str | None,
     parse (which handles the header-unit fallback for a bare "40"). Only cells in
     a limit context with a resolved unit are promoted -- a conditions-table cell
     (no comparator, no limit-keyword header) or a unitless bare number is left as
-    plain cell text, not manufactured into a comparator-less Parameter."""
-    if not _is_limit_cell(cell.text, cell.header_path):
+    plain cell text, not manufactured into a comparator-less Parameter.
+
+    Reads `raw_text` first for the same reason the prose path does: when set, it
+    is the runs-verified transcription that still carries super/subscript (it is
+    populated only when it provably matches `text` modulo vertical alignment --
+    see assemble.backfill_cells), so a limit like "10⁻³" is not read as "10-3"."""
+    cell_text = cell.raw_text or cell.text
+    if not _is_limit_cell(cell_text, cell.header_path):
         return None
-    q = cell.quantity or parse_quantity(cell.text, cell.header_path)
+    q = cell.quantity or parse_quantity(cell_text, cell.header_path)
     if q is None or q.unit is None:
         return None
     value = _to_decimal(re.sub(r"^[<>≤≥]+", "", q.value), lang)
@@ -281,7 +287,15 @@ def annotate_node(node: Node) -> Node:
     params: list[Parameter] = []
     ambiguous_surfaces: list[str] = []
     if node.type in ("paragraph", "list_item", "note", "caption", "heading"):
-        text = node.text or node.raw_text or ""
+        # Prefer the runs-derived raw_text, but only when it corroborates `text`
+        # (canonical_schema.preferred_text). raw_text is the only witness that
+        # keeps super/subscript -- Docling's `text` has already flattened
+        # "10 m/s²" to "10 m/s 2", which this module then reads as a bare "10 m".
+        # But raw_text comes from an imprecise bbox query and can be INCOMPLETE
+        # (measured: a "6 Hz" node whose raw_text was just "Hz"), so taking it
+        # unconditionally trades one error for another. Guarded, the same corpus
+        # gives 418 nodes unchanged and 2 changed -- both corrections.
+        text = preferred_text(node.raw_text, node.text)
         params = parse_parameters(text, node.lang, source_object_id=node.id)
         ambiguous_surfaces = [w for w in re.findall(r"\d[\d.,]*\d", text)
                               if _decimal_ambiguous(w, node.lang)]

@@ -277,3 +277,77 @@ def test_german_comma_not_flagged_ambiguous():
     n = _node(id="p", text="≤ 3,5 V/m", lang="de")
     out = parameters.annotate_node(n)
     assert out.parameters and not out.review_required
+
+
+def test_parameters_read_raw_text_not_flattened_text():
+    """The runs authority must win. Docling flattens "10⁻³ V/m" to "10-3 V/m"
+    *before the string exists*, and this module then reads "10-3" as a RANGE
+    10..3 -- fabricating a compliance limit two orders of magnitude wrong from a
+    document that said 0.001. raw_text is reconstructed from the PyMuPDF runs and
+    still carries the superscript, so it is what gets parsed."""
+    import canonical_schema as cs
+    from app.pipeline import parameters as P
+
+    node = cs.Node(
+        id="n1", type="paragraph", text="10-3 V/m", raw_text="10⁻³ V/m",
+        provenance=cs.Provenance(page=1, bbox=(0, 10, 10, 0), parser="docling",
+                                 model_version="x", confidence=0.95),
+    )
+    out = P.annotate_node(node)
+    ranges = [p.range for p in out.parameters if p.comparator == "range"]
+    assert (Decimal("10"), Decimal("3")) not in ranges, \
+        "flattened '10-3' was read as a 10..3 range -- raw_text was ignored"
+
+
+def test_cell_parameter_prefers_cell_raw_text():
+    import canonical_schema as cs
+    from app.pipeline import parameters as P
+
+    # raw_text set => it is the verified transcription and must be used.
+    cell = cs.Cell(row=1, col=0, text="10-3 V/m", raw_text="10⁻³ V/m",
+                   header_path=["Grenzwert"])
+    p = P._cell_parameter(cell, "obj1", "en")
+    if p is not None:
+        assert p.range != (Decimal("10"), Decimal("3"))
+
+
+def test_incomplete_raw_text_falls_back_to_text():
+    """raw_text is reconstructed from runs found by a bbox query that is not
+    always precise, so it can be INCOMPLETE. Measured on the corpus: a node whose
+    text was '6 Hz' had raw_text 'Hz' -- preferring raw_text unconditionally
+    silently dropped the value. The guard requires raw_text to corroborate text
+    before it is trusted."""
+    import canonical_schema as cs
+    from app.pipeline import parameters as P
+
+    node = cs.Node(
+        id="n", type="paragraph", text="6 Hz", raw_text="Hz",
+        provenance=cs.Provenance(page=1, bbox=(0, 10, 10, 0), parser="docling",
+                                 model_version="x", confidence=0.95),
+    )
+    out = P.annotate_node(node)
+    assert [(p.value, p.unit) for p in out.parameters] == [(Decimal("6"), "Hz")]
+
+
+def test_corroborating_raw_text_recovers_the_real_unit():
+    """The win the guard must preserve: Docling flattens '10 m/s²' to '10 m/s 2',
+    which parses as a bare '10 m' (length!) instead of an acceleration."""
+    import canonical_schema as cs
+    from app.pipeline import parameters as P
+
+    node = cs.Node(
+        id="n", type="paragraph", text="der Wert 10 m/s 2", raw_text="der Wert 10 m/s²",
+        provenance=cs.Provenance(page=1, bbox=(0, 10, 10, 0), parser="docling",
+                                 model_version="x", confidence=0.95),
+    )
+    out = P.annotate_node(node)
+    assert [p.unit for p in out.parameters] == ["m/s^2"]
+
+
+def test_preferred_text_helper():
+    from canonical_schema import preferred_text
+    assert preferred_text("10 m/s²", "10 m/s 2") == "10 m/s²"   # corroborates -> runs win
+    assert preferred_text("Hz", "6 Hz") == "6 Hz"                 # incomplete -> text wins
+    assert preferred_text(None, "6 Hz") == "6 Hz"
+    assert preferred_text("6 Hz", None) == "6 Hz"
+    assert preferred_text(None, None) == ""

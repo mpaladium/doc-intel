@@ -81,12 +81,29 @@ _SKIP_LABELS = {DocItemLabel.PAGE_HEADER, DocItemLabel.PAGE_FOOTER}
 _CAPTION_LABELS = {DocItemLabel.CAPTION}
 
 # Docling's own layout model can mislabel caption-like text ("Table 1 ...",
-# "Figure 2 ...") as a SectionHeaderItem. Unguarded, that opens a spurious
-# new "section" node for it. This is a language-limited heuristic (English
-# only) -- acceptable here because it only ever *prevents* a false section
-# promotion; on a miss, the text still becomes a normal caption/paragraph
-# node under the open section, never lost.
-_CAPTION_LIKE = re.compile(r"^(table|figure|fig\.)\s*\d+", re.IGNORECASE)
+# "Figure 2 ...", "Tabelle 3 - ...", "Bild 4 - ...") as a SectionHeaderItem.
+# Unguarded, that opens a spurious new "section" node which then adopts the very
+# table/figure the text is captioning, plus everything up to the next real
+# heading. This heuristic only ever *prevents* a false section promotion; on a
+# miss the text still becomes a normal caption/paragraph node under the open
+# section, never lost.
+#
+# German coverage is not cosmetic: while this was English-only, the German
+# samples produced 14 spurious sections, and because
+# gates/cross_reference._caption_inventory only scans type=="caption", every
+# "siehe Tabelle 3" pointing at a section-ized caption dangled -- 16 of 30
+# unresolved table/figure refs on quarantined nodes traced back to exactly this.
+# Also catches "Tabelle 19 (fortgesetzt)" (continuation headers).
+_CAPTION_LIKE = re.compile(
+    r"^(table|figure|fig\.|tabelle|bild|abbildung|abb\.|tab\.)\s*\d+", re.IGNORECASE)
+
+# Standalone block labels Docling reports as headings which open no section: a
+# legend/key labels the symbols of the adjacent object. Emitted as a `note`
+# rather than a caption -- a legend is explanatory text, not the caption of a
+# numbered object, so calling it a caption would invent a parent relationship
+# (and pollute the caption inventory the xref gate resolves against).
+_BLOCK_LABEL = re.compile(
+    r"^(legende|zeichenerkl[äa]rung|legend|key)\s*:?\s*$", re.IGNORECASE)
 
 # Docling doesn't expose one per-element confidence score for born-digital
 # text (it's not an ML prediction on this path, it's the PDF's own text
@@ -440,10 +457,14 @@ def _build_tree(dldoc) -> list[Node]:
         item_text = getattr(item, "text", None)
 
         if label in _HEADING_LABELS:
-            # Guard: Docling can mislabel caption-like text as a heading; never
-            # open a section for it.
-            if item_text and _CAPTION_LIKE.match(item_text.strip()):
+            # Guard: Docling can mislabel caption-like text or a standalone block
+            # label as a heading; never open a section for either.
+            stripped = item_text.strip() if item_text else ""
+            if stripped and _CAPTION_LIKE.match(stripped):
                 attach(_Builder("caption", item_text, _provenance(item, _DIGITAL_TEXT_CONFIDENCE)))
+                return
+            if stripped and _BLOCK_LABEL.match(stripped):
+                attach(_Builder("note", item_text, _provenance(item, _DIGITAL_TEXT_CONFIDENCE)))
                 return
             heading_level = getattr(item, "level", 1) or 1
             while stack and stack[-1][0] >= heading_level:

@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import re
 
-from canonical_schema import CDMType, Node
+from canonical_schema import CDMType, Node, preferred_text
 from app.pipeline.modality import ADMONITIONS, _lang_key, find_modals
 
 # Precedence: strongest normative force first. A clause with both `shall` and
@@ -72,7 +72,8 @@ def classify_node(node: Node) -> CDMType | None:
     """The CDM type for one node, or None to leave it an informative Paragraph.
     Section headings resolve to structural roles; text bodies to modal roles;
     an admonition outranks the modal inside it."""
-    text = node.text or node.raw_text
+    # runs authority when it corroborates `text`, same rule as parameters.py
+    text = preferred_text(node.raw_text, node.text)
     if not text:
         return None
     if (role := _section_role(node)) is not None:

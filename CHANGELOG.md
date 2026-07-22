@@ -6,6 +6,89 @@ tag releases yet, so entries are grouped by work session instead of version.
 
 ## Unreleased
 
+### Fixed — German captions became false sections; runs authority now guarded; table cells get runs (0.14.0)
+
+Three findings from the Linux evaluation, each verified against the corpus
+before and after.
+
+**1. An English-only regex was corrupting German document structure.**
+`extract_docling._CAPTION_LIKE` guards against Docling mislabelling a caption as
+a heading — but only matched `table|figure|fig.`. In the German samples that
+produced **14 spurious sections**: `Tabelle 3 – FPSC Luftentladung` became a
+*section that then adopted the very table it captions*, and
+`Tabelle 19 (fortgesetzt)` swallowed a table plus six siblings. All carried
+`clause_id=None`.
+
+The damage was not only structural. `gates/cross_reference._caption_inventory`
+only scans `type == "caption"`, so a caption promoted to a section is invisible
+to it and every `siehe Tabelle 3` dangles — this one regex was the **largest
+single source of quarantines** in those documents. Extending it to
+`tabelle|bild|abbildung|abb.|tab.`, plus a new `_BLOCK_LABEL` for standalone
+`Legende`/`Zeichenerklärung`/`Legend`/`Key` (emitted as a `note` — a legend is
+not the caption of a numbered object, and this keeps it out of the caption
+inventory), gives: **spurious sections 14 → 0**, caption nodes 14 → 24,
+**total gate quarantines 72 → 62**, `cross_reference` 28 → 19. The residual
+unresolved refs (`Figure 3`, `Annex A`, …) are genuine page-slice artifacts.
+
+This also makes `caption_attach.attach_captions_by_proximity` reachable for
+German documents — it already handled captions above *or* below a table; German
+captions simply never became captions.
+
+**Read the eval report's caption-attachment line carefully: the ratio drops
+(14/15 = 0.933 → 19/24 = 0.792) while the outcome improves.** The denominator
+grew because 9 captions that were previously mis-typed as sections are now
+counted as captions at all; captions actually attached rose 14 → 19. The 5 that
+don't attach are page-straddling or have no detected adjacent object
+(`Tabelle 4`, `Bild 14`, `Tabelle 20 (fortgesetzt)`), and `caption_attach`
+requires an adjacent same-page table/figure — it declines to guess by design.
+Relaxing that same-page constraint for a caption at a page boundary is the
+obvious follow-up, and is not done here.
+
+**2. `raw_text` is the right authority, but only when it corroborates `text`.**
+`parameters.py` read Docling's flattened `text`, where `10 m/s²` has already
+become `10 m/s 2` and parses as a bare `10 m` (a length!). `identity.py` and
+`run_integrity.py` already preferred `raw_text`. But switching unconditionally
+is *also* wrong: `raw_text` is reconstructed from runs found by an imprecise
+bbox query and can be **incomplete** — measured, a node whose `text` was `6 Hz`
+had `raw_text` of just `Hz`, so preferring it silently dropped the value.
+
+New shared helper `canonical_schema.preferred_text()` / `same_text_content()`
+uses the runs witness only when it agrees with `text` modulo whitespace and
+vertical alignment. Measured over 420 real nodes: **418 unchanged, 2 changed,
+both corrections** (`10 m` → `10 m/s^2`; a bogus `100 cm` → correctly nothing),
+**zero regressions**. Applied to `parameters.py` and `classify_type.py`.
+
+Note for anyone extending this: NFKC maps SUPERSCRIPT MINUS (U+207B) to MINUS
+SIGN (U+2212), *not* ASCII hyphen, so `10⁻³` does not compare equal to `10-3`
+without also folding the dash family — the most valuable case would otherwise be
+silently rejected.
+
+**3. Table cells now carry their own runs** (`Cell.runs`, `Cell.raw_text`).
+Cells hold the actual limit values yet had no super/subscript protection at all;
+`_backfill_runs` covered only prose types. Every cell now records its PyMuPDF
+runs and a `parsers["pymupdf"]` candidate beside `parsers["docling"]`, reusing
+the existing region helpers.
+
+Enrichment is deliberately narrow, and the numbers are why. Content-equality
+alone marked **360** cells enrichable — but nearly all differed only in
+whitespace, where the runs version is strictly *worse*, because
+`reconstruct_raw_text` is a bare `"".join()` and drops the space at an internal
+line break (`industries. We` → `industries.We`). Requiring the runs to actually
+carry vertical alignment cuts that to **14** cells. Those 14 are all footnote
+markers (`b)` → `b⁾`), not exponents: **this corpus contains no flattened
+exponent in a table cell, so the cell work is mechanism and evidence, not a
+measured accuracy win.** `cell.text` is never overwritten, and a structural
+mismatch (~20% of cells, dominated by imprecise cell geometry rather than real
+corruption) raises no finding — that would manufacture false alarms.
+
+`PIPELINE_VERSION` → `0.14.0` (tree shape, captions, parameters and the cell
+schema all change).
+
+**Known, deliberately out of scope:** `reconstruct_raw_text` drops the
+line-break space in any multi-line region. Real and pre-existing (it affects
+`identity`/`run_integrity` too); the guards above make it harmless here, but it
+deserves its own change and its own measurement.
+
 ### Fixed — `INGESTION_DEVICE=auto` silently disabled GLM-OCR on every scripted start
 
 `app/pipeline/device.resolve_device()` returned its `INGESTION_DEVICE` override
