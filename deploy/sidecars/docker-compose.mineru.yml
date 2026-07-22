@@ -1,0 +1,35 @@
+# Minimal MinerU/UniMERNet corroborator sidecar.
+#
+# Bring up:   docker compose -f deploy/sidecars/docker-compose.mineru.yml up -d
+# Point the pipeline at it:
+#              export INGESTION_MINERU_URL=http://127.0.0.1:8101
+#
+# The HF cache is a named volume so the ~1 GB of weights survives container
+# rebuilds. First request after `up` triggers the lazy load (~30-60s on CPU).
+
+services:
+  mineru:
+    build:
+      context: .
+      dockerfile: mineru.Dockerfile
+    image: ingestion-mineru-sidecar:latest
+    container_name: ingestion-mineru
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8101:8101"     # localhost only; sidecar is not a public API
+    volumes:
+      - mineru-hf-cache:/models/hf
+    # GPU is optional. To bind an NVIDIA GPU, install nvidia-container-toolkit
+    # on the host and uncomment the block below (and switch the pip install in
+    # mineru.Dockerfile to a CUDA torch build for actual acceleration).
+    #
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+volumes:
+  mineru-hf-cache: {}

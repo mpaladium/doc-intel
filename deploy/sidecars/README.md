@@ -113,6 +113,23 @@ expose it to an untrusted network.
 A third independent LaTeX candidate per equation (encoder-decoder, not a VLM —
 genuinely different failure modes from GLM-OCR, which is the point).
 
+### 2a. Docker (simplest)
+
+```bash
+docker compose -f deploy/sidecars/docker-compose.mineru.yml up -d
+export INGESTION_MINERU_URL=http://127.0.0.1:8101
+```
+
+Image builds from `mineru.Dockerfile` (Python 3.11 + pinned `transformers==4.42.4`
++ `unimernet`); weights land in the `mineru-hf-cache` named volume so rebuilds
+don't re-download. First request warms the model (~30-60s on CPU). GPU passthrough
+is commented in the compose file — uncomment and switch to a CUDA torch build to
+use it. Note that the official MinerU Docker image (`mineru-api` on port 8000) is
+document-level and does NOT speak this adapter's PNG-crop contract; this image is
+purpose-built for the corroborator role.
+
+### 2b. Local venv
+
 ```bash
 # separate venv -- transformers pin conflicts with this repo's
 uv venv ~/.venvs/unimernet --python 3.11
