@@ -85,7 +85,10 @@ def _corroborator_config() -> str:
     `scripts/start_stack.sh` verifies up front; the engines' own lazy-load lines
     ("GLM-OCR via ollama at ..." / "GLM-OCR loaded in-process on cuda") confirm
     which backend actually initialized, on first use."""
+    from app.pipeline.extract_docling import resolved_ocr_engine
+
     parts = []
+    parts.append(f"docling_ocr_engine={resolved_ocr_engine()}")
     if os.environ.get("INGESTION_GLM_OCR", "1").lower() in ("0", "false", "no"):
         parts.append("glm_ocr=off")
     elif (url := os.environ.get("INGESTION_GLM_OCR_URL")):

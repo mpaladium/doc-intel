@@ -155,6 +155,70 @@ def _select_num_threads() -> int:
     return min(os.cpu_count() or 4, 8)
 
 
+# The OCR engine is PINNED, not left on Docling's `OcrAutoOptions`. Auto probes
+# what happens to be importable, in the order ocrmac (darwin) > nemotron >
+# rapidocr+onnxruntime > easyocr > rapidocr+torch -- so the same PDF at the same
+# PIPELINE_VERSION would transcribe differently on two machines depending only on
+# which optional packages are installed. That silently breaks the
+# content-address contract (sha256(pdf)+pipeline_version must identify the
+# output), and it also made the `rapidocr` voter label in assemble.py an
+# assumption rather than an observation: install `ocrmac` on a Mac and Apple
+# Vision's text would have been recorded as "rapidocr".
+#
+# rapidocr+torch is the default because it reproduces exactly what auto selects
+# on both supported hosts today (no ocrmac/onnxruntime/easyocr installed) and
+# torch is a hard docling dependency, so it is always available -- unlike
+# RapidOcrOptions' own `backend="onnxruntime"` default, which is NOT installed
+# here and would fail. `lang`/thresholds are left at the values auto passes.
+_OCR_ENGINES = ("rapidocr", "surya")
+_DEFAULT_OCR_ENGINE = "rapidocr"
+
+
+def _ocr_engine_choice() -> str:
+    choice = os.environ.get("INGESTION_OCR_ENGINE", "").strip().lower()
+    return choice if choice in _OCR_ENGINES else _DEFAULT_OCR_ENGINE
+
+
+def _surya_ocr_options():
+    """docling-surya's options, or None when unusable.
+
+    Optional and GPL-3.0, so it is never a base dependency (`uv sync --extra
+    surya-plugin`) and never required at runtime: a missing/incompatible plugin
+    degrades to the default engine with one log line, the same contract every
+    other engine here follows. It also can't install on macOS -- surya-ocr needs
+    transformers>=5.12.1 while docling-ibm-models caps <5.9.0 under the darwin
+    marker."""
+    try:
+        from docling_surya import SuryaOcrOptions
+    except Exception as exc:
+        log.warning("INGESTION_OCR_ENGINE=surya but docling-surya is unusable "
+                    "(%s: %s) -- falling back to %s. Install with: "
+                    "uv sync --extra surya-plugin (Linux only)",
+                    type(exc).__name__, str(exc)[:160], _DEFAULT_OCR_ENGINE)
+        return None
+    return SuryaOcrOptions()
+
+
+def resolved_ocr_engine() -> str:
+    """The name of the OCR engine Docling is actually configured to run.
+
+    Cheap (no model load) and truthful -- this is what labels the primary
+    scanned-page transcription in `Node.parsers`, so it must never be a guess."""
+    if _ocr_engine_choice() == "surya" and _surya_ocr_options() is not None:
+        return "surya"
+    return _DEFAULT_OCR_ENGINE
+
+
+def _ocr_options():
+    """The pinned `ocr_options` for the pipeline (see `_OCR_ENGINES` note)."""
+    from docling.datamodel.pipeline_options import RapidOcrOptions
+
+    if _ocr_engine_choice() == "surya":
+        if (surya := _surya_ocr_options()) is not None:
+            return surya
+    return RapidOcrOptions(backend="torch")
+
+
 def _formulas_enabled() -> bool:
     """`INGESTION_FORMULAS` (default on). Docling's formula enrichment
     (CodeFormulaV2) is the Goal-1 `extract.equation` path -- it re-reads each
@@ -194,6 +258,11 @@ def build_converter(ocr_enabled: bool = False, formulas: bool | None = None) -> 
     pipeline_options.do_ocr = ocr_enabled
     pipeline_options.do_table_structure = True
     pipeline_options.table_structure_options = _table_structure_options()
+    pipeline_options.ocr_options = _ocr_options()
+    if resolved_ocr_engine() == "surya":
+        # docling refuses to load a third-party (GPL) OCR plugin unless the
+        # caller opts in explicitly.
+        pipeline_options.allow_external_plugins = True
     pipeline_options.do_formula_enrichment = formulas
     pipeline_options.accelerator_options = AcceleratorOptions(
         device=_select_device(), num_threads=_select_num_threads(),

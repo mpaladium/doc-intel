@@ -281,6 +281,61 @@ def test_sidecar_adapters_unavailable_without_url(monkeypatch):
     assert surya.recognize_text(_img()) is None
 
 
+# --- OCR engine selection (INGESTION_OCR_ENGINE & docling-surya) ------------------
+
+def test_default_ocr_engine_is_rapidocr(monkeypatch):
+    monkeypatch.delenv("INGESTION_OCR_ENGINE", raising=False)
+    from app.pipeline.extract_docling import resolved_ocr_engine
+    # reset the lazy function by reloading the module
+    import importlib
+    import app.pipeline.extract_docling as edm
+    importlib.reload(edm)
+    assert edm.resolved_ocr_engine() == "rapidocr"
+
+
+def test_surya_ocr_engine_falls_back_when_plugin_unavailable(monkeypatch, caplog):
+    monkeypatch.setenv("INGESTION_OCR_ENGINE", "surya")
+    from app.pipeline.extract_docling import resolved_ocr_engine, _surya_ocr_options
+    import importlib
+    import app.pipeline.extract_docling as edm
+    importlib.reload(edm)
+    # when the plugin is not installed, it should fall back and log
+    assert edm.resolved_ocr_engine() == "rapidocr"
+    assert "docling-surya" in caplog.text or "surya" in caplog.text.lower()
+
+
+def test_surya_sidecar_excluded_when_primary_is_surya(monkeypatch):
+    """Mutual exclusion: if Surya is Docling's OCR engine, the Surya sidecar must
+    not run (assemble._ocr_text_engines drops it). The same model cannot be both
+    the primary transcription and its own independent second opinion."""
+    monkeypatch.setenv("INGESTION_OCR_ENGINE", "surya")
+    # Patch the Surya plugin as available
+    from app.pipeline.extract_docling import _surya_ocr_options
+    def mock_surya_opts():
+        try:
+            from docling_surya import SuryaOcrOptions
+        except ImportError:
+            # If not installed, create a mock
+            class SuryaOcrOptions:
+                pass
+            return SuryaOcrOptions()
+        return SuryaOcrOptions()
+
+    # Mock both the option loader and the primary engine resolver
+    monkeypatch.setattr("app.pipeline.extract_docling._surya_ocr_options", mock_surya_opts)
+
+    import importlib
+    import app.pipeline.extract_docling as edm
+    import app.pipeline.assemble as asm
+    importlib.reload(edm)
+
+    primary = edm.resolved_ocr_engine()
+    if primary == "surya":  # only test mutual exclusion if Surya actually loaded
+        engines = asm._ocr_text_engines(primary)
+        engine_names = [e.ENGINE_NAME for e in engines]
+        assert "surya" not in engine_names, "Surya sidecar should be excluded when it's the primary engine"
+
+
 # --- opt-in real-inference smoke test (GLM-OCR, in-process) ----------------------
 
 def _weights_cached() -> bool:

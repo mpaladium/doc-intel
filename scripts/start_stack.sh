@@ -219,6 +219,12 @@ setup_sidecar mineru "${MINERU_PORT}" "${MINERU_VENV}" \
 setup_sidecar surya "${SURYA_PORT}" "${SURYA_VENV}" \
   deploy/sidecars/surya_server.py INGESTION_SURYA_URL && OCR_LANE+=("surya") || true
 
+log "engine configuration:"
+docling_ocr=$(uv run python3 - <<'EOPY'
+from app.pipeline.extract_docling import resolved_ocr_engine; print(resolved_ocr_engine())
+EOPY
+)
+status "docling_ocr" "$(echo "$docling_ocr" | head -1)" ""
 log "corroborator status:"
 for line in "${STATUS_LINES[@]}"; do echo "[stack] ${line}"; done
 

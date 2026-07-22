@@ -145,6 +145,25 @@ python deploy/sidecars/surya_server.py --port 8102
 export INGESTION_SURYA_URL=http://127.0.0.1:8102
 ```
 
+This **sidecar is a corroborator** — an independent second opinion on scanned
+pages, alongside whatever engine Docling itself runs. It does not change which
+engine Docling uses as the primary transcription.
+
+**To make Surya *Docling's* OCR engine (primary, not corroborator):** Linux only;
+install `docling-surya` manually on Linux (unsupported on macOS due to transformer
+version conflicts), then:
+
+```bash
+export INGESTION_OCR_ENGINE=surya
+./scripts/start_stack.sh
+```
+
+The engine log will confirm `docling_ocr=surya` if the plugin is available, or
+`docling_ocr=rapidocr` with a warning if it cannot be imported. **Important:** when
+Docling's OCR engine is Surya, the Surya *sidecar* is automatically disabled
+(assemble._ocr_text_engines) — the same model cannot be both the primary
+transcription and its own independent second opinion.
+
 **Licence note:** Surya's *code* is Apache-2.0 but its *weights* are Rail-M
 (conditional commercial terms). Keeping it in a sidecar means those weights
 never enter this repo's environment — check the terms before production use.

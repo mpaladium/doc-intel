@@ -21,16 +21,33 @@ dependencies = [
 ]
 
 # Opt-in model-backed corroborator engines (parser-consensus.md) are DELIBERATELY
-# NOT listed as installable extras here: their dependency stacks are mutually
-# incompatible AND incompatible with the base pipeline's `transformers` pin (via
-# docling) -- UniMERNet 0.2.3 hard-pins transformers==4.42.4, Surya wants
-# transformers>=4.51, docling resolves 5.8.x. Forcing them into this project's
-# single lock resolution is unsatisfiable. They therefore run OUT-OF-PROCESS in
-# their own environments and are reached by the graceful adapters in
-# app/pipeline/engines/{mineru,surya}.py (see docs/references/ocr-engine-evaluation.md).
-# The default build stays clean-licensed and light; the adapters report
-# unavailable when their engine isn't reachable, so ingestion never hard-depends
-# on them.
+# NOT in the base dependencies: their stacks are mutually incompatible AND
+# incompatible with the base pipeline's `transformers` pin (via docling) --
+# UniMERNet 0.2.3 hard-pins transformers==4.42.4, while surya-ocr 0.22 now
+# requires transformers>=5.12.1 and docling-ibm-models caps it at <5.9.0 under
+# the `sys_platform == "darwin"` marker (<6.0.0 elsewhere). So the Surya conflict
+# is now PLATFORM-DEPENDENT: unsatisfiable on macOS, satisfiable on Linux only by
+# moving transformers off 5.8.x and downgrading pillow to <11 (surya-ocr's cap,
+# vs the 12.x we run) -- both of which change extraction output for the same PDF.
+# They therefore run OUT-OF-PROCESS in their own environments, reached by the
+# graceful adapters in app/pipeline/engines/{mineru,surya}.py. The default build
+# stays clean-licensed and light; the adapters report unavailable when their
+# engine isn't reachable, so ingestion never hard-depends on them.
+
+# docling-surya (INGESTION_OCR_ENGINE=surya) makes Surya *Docling's own* OCR
+# engine for scanned pages. It is deliberately NOT declared here at all -- not
+# even as an optional extra. uv resolves extras into the SAME lock as the base
+# dependencies, so merely declaring it dragged surya-ocr's `pillow<11` cap into
+# the default install and downgraded pillow 12.3 -> 10.4 for everyone (measured,
+# not theoretical). An "optional" dependency that silently changes the default
+# build's imaging stack is not optional.
+# Install it deliberately, into the active venv, on Linux only:
+#   uv pip install docling-surya      # see deploy/sidecars/README.md
+# The code supports it either way: extract_docling falls back to rapidocr with
+# one log line when the plugin is absent. NOTE that enabling it also disables the
+# Surya *corroborator* sidecar -- one model cannot be both the primary
+# transcription and its own independent second opinion
+# (assemble._ocr_text_engines).
 
 [dependency-groups]
 dev = [

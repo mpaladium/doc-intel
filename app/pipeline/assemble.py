@@ -19,6 +19,7 @@ aggressively"). An explicit `ocr_enabled=True` caller override always wins.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import unicodedata
@@ -33,11 +34,15 @@ from app.pipeline import (
     canon_equation, canon_units, caption_attach, classify_type, continuity, gates, identity,
     lang, lattice, nested_table, parameters, topology, triage, xref,
 )
-from app.pipeline.extract_docling import DOCLING_VERSION, extract_with_confidence
+from app.pipeline.extract_docling import (
+    DOCLING_VERSION, extract_with_confidence, resolved_ocr_engine,
+)
 from app.pipeline.route import Ownership
 from app.pipeline.section_role_classifier import ClassificationContext, RolePack, classify_document
 from app.pipeline.triage import PageClass, TriageResult
 from app.version import PIPELINE_VERSION, SCHEMA_VERSION
+
+log = logging.getLogger("pipeline.assemble")
 
 _OCR_TRIGGER_CLASSES = {"SCANNED", "UNCERTAIN"}
 
@@ -371,22 +376,34 @@ _OCR_PAGE_CLASSES = {"SCANNED", "UNCERTAIN"}
 # available()/recognize_text and is registered in consensus.GENUINE_TEXT_PARSERS,
 # so `_apply_text_consensus` votes over whatever they populate without a
 # call-site change (SKILLS.md rule 5). GLM-OCR is default-on; Surya is opt-in.
-def _ocr_text_engines():
+def _ocr_text_engines(primary_ocr: str = ""):
+    """Corroborators that are INDEPENDENT of the engine that produced the primary
+    text. If Docling's own OCR engine is Surya (docling-surya), the Surya sidecar
+    is dropped: the same model on both sides of a comparison is not a second
+    opinion, it is one opinion counted twice. It would agree with itself, and
+    N-version consensus would report false unanimity on exactly the scanned
+    pages where the risk of silent transcription error is highest."""
     from app.pipeline.engines import glm_ocr, surya
-    return [glm_ocr, surya]
+    engines = [glm_ocr, surya]
+    return [e for e in engines if e.ENGINE_NAME != primary_ocr]
 
 
 def _backfill_ocr_candidates(root: Node, pdf_bytes: bytes,
                              page_classes: list[TriageResult]) -> Node:
     """OCR-lane candidates on SCANNED/UNCERTAIN pages (parser-consensus.md OCR
     authority + confidence ceiling). There is no digital text layer there, so
-    the node text IS a RapidOCR transcription -- recorded under "rapidocr" as a
-    genuine voter -- and the OCR engines (GLM-OCR, Surya) contribute independent
-    second opinions; `_apply_text_consensus` then votes. Also enforces the spec's
-    "any OCR-derived Parameter is quarantined by default": a scanned limit is
-    exactly where digit confusables live. Born-digital pages are untouched
-    ("skip work aggressively"); no-op when no engine is available."""
-    engines = [e for e in _ocr_text_engines() if e.available()]
+    the node text IS Docling's OCR transcription -- recorded under the engine
+    that actually produced it as a genuine voter -- and the corroborator engines
+    contribute independent second opinions; `_apply_text_consensus` then votes.
+    Also enforces the spec's "any OCR-derived Parameter is quarantined by
+    default": a scanned limit is exactly where digit confusables live.
+    Born-digital pages are untouched ("skip work aggressively"); no-op when no
+    engine is available."""
+    primary_ocr = resolved_ocr_engine()
+    engines = [e for e in _ocr_text_engines(primary_ocr) if e.available()]
+    if primary_ocr != "rapidocr":
+        log.info("OCR lane: primary=%s, corroborators=%s",
+                 primary_ocr, [e.ENGINE_NAME for e in engines] or "none")
 
     scanned_pages = {i + 1 for i, tc in enumerate(page_classes)
                      if tc.page_class in _OCR_PAGE_CLASSES}
@@ -402,7 +419,9 @@ def _backfill_ocr_candidates(root: Node, pdf_bytes: bytes,
             if node.type in ("table", "figure"):
                 return node  # cell text is handled by the table lanes
             parsers = dict(node.parsers)
-            parsers.setdefault("rapidocr", node.text)
+            # Label the primary transcription with the engine Docling ACTUALLY
+            # ran, not an assumed one -- see extract_docling._OCR_ENGINES.
+            parsers.setdefault(primary_ocr, node.text)
             img = None
             for engine in engines:
                 if engine.ENGINE_NAME in parsers:
@@ -582,15 +601,17 @@ def assemble(pdf_bytes: bytes, source_sha256: str, ocr_enabled: bool = False) ->
 
     ownership = _ownership()
 
+    primary_ocr = resolved_ocr_engine()
+
     def _engine_for(content_type: str, page_class: str) -> str:
         engine = ownership.engine_for(content_type, page_class)
-        # OWNERSHIP names the OCR engine (rapidocr) regardless of whether OCR
-        # actually ran this call; report what actually happened -- if the
-        # triage-driven route didn't enable OCR (gated off, or the caller
-        # didn't ask for it), text still came from Docling's best-effort
-        # digital-layer read, not OCR.
-        if engine == "rapidocr" and not ocr_enabled:
-            return "docling"
+        # OWNERSHIP names the OCR lane's engine generically ("rapidocr") whether
+        # or not OCR ran, and whichever engine is configured; report what
+        # actually happened. If the triage-driven route didn't enable OCR (gated
+        # off, or the caller didn't ask), text came from Docling's best-effort
+        # digital-layer read, not OCR. If it did run, name the real engine.
+        if engine == "rapidocr":
+            return primary_ocr if ocr_enabled else "docling"
         return engine
 
     engine_by_page = {

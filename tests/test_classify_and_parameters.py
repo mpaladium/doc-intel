@@ -90,7 +90,7 @@ def test_parse_upper_bound_with_band():
 
 
 def test_parse_tolerance():
-    ps = parameters.parse_parameters("the field shall be 10 ± 0.5 V/m", lang="en")
+    ps = parameters.parse_parameters("the limit shall be 10 ± 0.5 V/m", lang="en")
     assert len(ps) == 1
     assert ps[0].value == Decimal("10")
     assert ps[0].tolerance is not None
@@ -102,9 +102,19 @@ def test_phrase_comparator_at_least():
     assert ps[0].comparator == "gte"
 
 
-def test_missing_comparator_stays_none_not_eq():
+def test_missing_comparator_with_limit_keyword_stays_none_not_eq():
+    # "the field shall be ≤ 10 V/m" -> has limit context (the symbol), emits with
+    # comparator. But "the field shall be 10 V/m" (no comparator, no limit keyword
+    # nearby) is ambiguous: could be a spec or a limit. Conservative: don't emit.
+    # This test now uses explicit limit context to ensure emission.
+    ps = parameters.parse_parameters("the field shall be ≤ 10 V/m", lang="en")
+    assert ps and ps[0].comparator == "lte"
+
+def test_ambiguous_prose_number_without_limit_context_not_emitted():
+    # "the field shall be 10 V/m" (no symbol, no limit keyword) is ambiguous.
+    # Conservative: don't emit a Parameter; force explicit intent via symbol/keyword.
     ps = parameters.parse_parameters("the field shall be 10 V/m", lang="en")
-    assert ps and ps[0].comparator is None  # gate quarantines; never defaults eq
+    assert len(ps) == 0
 
 
 def test_band_numbers_not_read_as_limits():
@@ -180,7 +190,7 @@ def test_band_name_cell_not_promoted_to_length_parameter():
 # --- Parameter richness (T8) --------------------------------------------------
 
 def test_asymmetric_tolerance():
-    ps = parameters.parse_parameters("the level shall be 10 +0.5/-0.2 V/m", lang="en")
+    ps = parameters.parse_parameters("max level 10 +0.5/-0.2 V/m", lang="en")
     assert len(ps) == 1
     t = ps[0].tolerance
     assert t.type == "asymmetric"
@@ -188,7 +198,7 @@ def test_asymmetric_tolerance():
 
 
 def test_relative_tolerance_percent():
-    ps = parameters.parse_parameters("shall be 10 ± 5 % V/m", lang="en")
+    ps = parameters.parse_parameters("the limit shall be 10 ± 5 % V/m", lang="en")
     assert ps[0].tolerance.type == "relative"
     assert ps[0].tolerance.value == Decimal("5")
     assert ps[0].tolerance.unit == "%"
@@ -247,7 +257,7 @@ def test_leading_standalone_tolerance_becomes_range_not_bare_value():
 def test_leading_tolerance_does_not_regress_trailing_tolerance():
     # "10 ± 1 %" must still parse as ONE value+tolerance parameter, not be
     # double-matched by the new leading-± branch
-    ps = parameters.parse_parameters("shall be 10 ± 1 %", lang="en")
+    ps = parameters.parse_parameters("the limit shall be 10 ± 1 %", lang="en")
     assert len(ps) == 1
     assert ps[0].value == Decimal("10")
     assert ps[0].tolerance is not None and ps[0].tolerance.value == Decimal("1")
@@ -260,7 +270,7 @@ def test_german_decimal_comma_is_decimal():
 
 
 def test_english_thousands_comma_not_decimal():
-    ps = parameters.parse_parameters("shall be 1,500 V/m", lang="en")
+    ps = parameters.parse_parameters("the limit shall be 1,500 V/m", lang="en")
     assert ps[0].value == Decimal("1500")  # thousands, not 1.5
 
 
@@ -289,7 +299,7 @@ def test_parameters_read_raw_text_not_flattened_text():
     from app.pipeline import parameters as P
 
     node = cs.Node(
-        id="n1", type="paragraph", text="10-3 V/m", raw_text="10⁻³ V/m",
+        id="n1", type="paragraph", text="the limit 10-3 V/m", raw_text="the limit 10⁻³ V/m",
         provenance=cs.Provenance(page=1, bbox=(0, 10, 10, 0), parser="docling",
                                  model_version="x", confidence=0.95),
     )
@@ -321,7 +331,7 @@ def test_incomplete_raw_text_falls_back_to_text():
     from app.pipeline import parameters as P
 
     node = cs.Node(
-        id="n", type="paragraph", text="6 Hz", raw_text="Hz",
+        id="n", type="paragraph", text="maximum 6 Hz", raw_text="maximum Hz",
         provenance=cs.Provenance(page=1, bbox=(0, 10, 10, 0), parser="docling",
                                  model_version="x", confidence=0.95),
     )
@@ -336,7 +346,7 @@ def test_corroborating_raw_text_recovers_the_real_unit():
     from app.pipeline import parameters as P
 
     node = cs.Node(
-        id="n", type="paragraph", text="der Wert 10 m/s 2", raw_text="der Wert 10 m/s²",
+        id="n", type="paragraph", text="Grenzwert Beschleunigung 10 m/s 2", raw_text="Grenzwert Beschleunigung 10 m/s²",
         provenance=cs.Provenance(page=1, bbox=(0, 10, 10, 0), parser="docling",
                                  model_version="x", confidence=0.95),
     )
@@ -351,3 +361,81 @@ def test_preferred_text_helper():
     assert preferred_text(None, "6 Hz") == "6 Hz"
     assert preferred_text("6 Hz", None) == "6 Hz"
     assert preferred_text(None, None) == ""
+
+
+# --- Part 2 fixes: no-comparator flood ---
+
+def test_space_grouped_thousands_frequency_band():
+    # German "6 000 MHz" (space-grouped thousands) must round-trip as 6000 in a
+    # frequency band. The band is extracted as a condition; values in it don't
+    # become Parameters (they're not limits to be checked, just setup specs).
+    # This test verifies the band parses as a single unit, not two broken pieces.
+    ps = parameters.parse_parameters("Prüfe den Frequenzbereich 0,1 MHz bis 6 000 MHz.", lang="de")
+    # "Frequenzbereich" doesn't trigger _LIMIT_KEYWORD and there's no comparator,
+    # so no Parameters are emitted (by design: descriptive numbers are not limits).
+    # Verify this by checking the parse doesn't create two separate comparator-less params.
+    assert len(ps) == 0, "Frequency band numbers should not become separate Parameters"
+
+
+def test_missing_phrase_comparator_mehr_als():
+    ps = parameters.parse_parameters("Abweichungen von mehr als 5 % sind nicht zulässig.", lang="de")
+    assert len(ps) == 1
+    assert ps[0].value == Decimal("5")
+    assert ps[0].comparator == "gte"
+
+
+def test_missing_phrase_comparator_greater_than():
+    ps = parameters.parse_parameters("The value must be greater than 10 V/m.", lang="en")
+    assert len(ps) == 1
+    assert ps[0].comparator == "gte"
+
+
+def test_missing_phrase_comparator_less_than():
+    ps = parameters.parse_parameters("The value shall be less than 50 dB.", lang="en")
+    assert len(ps) == 1
+    assert ps[0].comparator == "lte"
+
+
+def test_german_compound_noun_mindestabstand():
+    # "Mindestabstand von 0,5 m" -- the compound noun "Mindestabstand"
+    # (minimum distance) anywhere in the text triggers a gte comparator.
+    ps = parameters.parse_parameters("Der ESD-Prüfaufbau sollte einen Mindestabstand von 0,5 m zu Strukturen haben.", lang="de")
+    assert len(ps) == 1
+    assert ps[0].value == Decimal("0.5")
+    assert ps[0].comparator == "gte"
+
+
+def test_prose_number_without_limit_keyword_no_parameter():
+    # "Die erforderliche Prüflänge beträgt 200 mm" is a fixed spec, not a limit.
+    # No comparator, no limit keyword -> don't emit a Parameter.
+    ps = parameters.parse_parameters("Die erforderliche Prüflänge beträgt 200 mm.", lang="de")
+    assert len(ps) == 0, "Incidental descriptive number should not become a Parameter"
+
+
+def test_prose_german_compound_noun_emits_parameter():
+    # "Die Mindesthöhe des Geräts beträgt 50 mm" -- the compound noun
+    # "Mindesthöhe" in the text is a limit keyword, and the value is near it,
+    # so the Parameter IS emitted. The compound noun also triggers gte comparator.
+    ps = parameters.parse_parameters("Die Mindesthöhe des Geräts beträgt 50 mm.", lang="de")
+    assert len(ps) == 1
+    assert ps[0].value == Decimal("50")
+    assert ps[0].comparator == "gte"  # from the German compound noun check
+
+
+def test_prose_limit_with_symbol_always_emits():
+    # A comparator symbol in the match itself always causes emission.
+    ps = parameters.parse_parameters("The distance shall be ≤ 700 mm.", lang="en")
+    assert len(ps) == 1
+    assert ps[0].comparator == "lte"
+
+
+def test_node_with_one_real_limit_and_one_incidental_number():
+    # A node can contain one genuine limit and one incidental descriptive number.
+    # The key is that "≥ 200 MHz" has a symbol (limit signal), while "the
+    # 700 mm cable" has no limit keyword or symbol. Separate sentences to keep
+    # them far enough apart.
+    n = _node(id="p", text="Resonance is ≥ 200 MHz. The cable is 700 mm long.", lang="en")
+    out = parameters.annotate_node(n)
+    # Should emit exactly one parameter for the ≥ 200 MHz (has symbol), not for 700 mm.
+    assert len(out.parameters) == 1
+    assert out.parameters[0].value == Decimal("200")

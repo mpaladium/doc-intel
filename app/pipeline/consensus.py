@@ -47,10 +47,14 @@ OCR_CONFIDENCE_CEILING = 0.95
 # `Node.parsers` for the audit trail; it just doesn't force a quarantine.
 #
 # On SCANNED pages the situation inverts: there is no digital text layer, so
-# "docling's text" IS a RapidOCR transcription -- genuine; the OCR backfill
-# stores it under "rapidocr" and GLM-OCR contributes the second opinion.
-# "mineru"/"surya" stay registered so those engines can be added without a
-# call-site rewrite.
+# On a scanned page "docling's text" IS an OCR transcription -- genuine. The OCR
+# backfill stores it under the engine that actually produced it
+# (extract_docling.resolved_ocr_engine(), normally "rapidocr"), and the
+# corroborator engines contribute the second opinions. Every possible primary
+# and corroborator is registered here so an engine swap needs no call-site
+# rewrite -- but note a model may only appear ONCE per comparison: if the
+# primary engine is Surya, the Surya corroborator is dropped upstream rather
+# than voting against itself (see assemble._ocr_text_engines).
 GENUINE_TEXT_PARSERS = frozenset({"pymupdf", "glm_ocr", "rapidocr", "mineru", "surya"})
 
 # When several genuine transcribers voted, the authority is the highest-ranked

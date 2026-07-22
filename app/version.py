@@ -35,13 +35,23 @@ def tableformer_variant() -> str:
     return "v1" if choice in _TABLEFORMER_V1_ALIASES else "v2"
 
 
+def ocr_engine_variant() -> str:
+    """`INGESTION_OCR_ENGINE` (rapidocr|surya, default rapidocr). Which engine
+    Docling itself uses to transcribe scanned pages -- a different engine means
+    different text for the same page, so it belongs in the version identity."""
+    choice = os.environ.get("INGESTION_OCR_ENGINE", "").strip().lower()
+    return "surya" if choice == "surya" else "rapidocr"
+
+
 def _pipeline_version() -> str:
     """The base version, suffixed for any non-default engine selection so the
-    two variants occupy separate content-address namespaces. Uses "-" (not "+")
+    variants occupy separate content-address namespaces. Uses "-" (not "+")
     to keep exactly one "+" in `sha256(pdf)+pipeline_version` keys."""
     version = _BASE_PIPELINE_VERSION
     if tableformer_variant() == "v1":
         version += "-tfv1"
+    if ocr_engine_variant() != "rapidocr":
+        version += f"-ocr{ocr_engine_variant()}"
     return version
 
 

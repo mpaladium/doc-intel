@@ -40,9 +40,9 @@ _UNIT_NORMALIZE = {
 # Longest-first so multi-char units match before their prefixes.
 _UNIT_ALT = "|".join(re.escape(u) for u in sorted(_UNIT_NORMALIZE, key=len, reverse=True))
 
-# A numeric value: optional comparator, a number (German comma or dot),
-# optionally a range "a - b". Kept as surface text.
-_NUM = r"\d+(?:[.,]\d+)?"
+# A numeric value: optional comparator, a number (German comma or dot, or space-grouped
+# thousands like "6 000"), optionally a range "a - b". Kept as surface text.
+_NUM = r"(?:\d{1,3}(?:\s\d{3})+|\d+)(?:[.,]\d+)?"
 _VALUE = rf"(?:[<>≤≥±]|<=|>=)?\s*{_NUM}(?:\s*[-–—]\s*{_NUM})?"
 
 # Whole cell = value (+unit) (+condition). Anchored so prose doesn't match.

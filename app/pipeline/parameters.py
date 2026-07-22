@@ -22,7 +22,7 @@ import re
 from decimal import Decimal, InvalidOperation
 
 from canonical_schema import Cell, Comparator, Node, Parameter, Tolerance, preferred_text
-from app.pipeline.canon_units import _UNIT_ALT, _normalize_unit, parse_quantity
+from app.pipeline.canon_units import _UNIT_ALT, _normalize_unit, parse_quantity, _NUM
 
 # unit -> controlled quantity_kind vocabulary (canonical-model.md example
 # "electric_field"). Keyed on the canonical unit string canon_units emits.
@@ -40,7 +40,6 @@ _QUANTITY_KIND: dict[str, str] = {
     "m/s^2": "acceleration",
 }
 
-_NUM = r"\d+(?:[.,]\d+)?"
 # A tolerance immediately after the value: symmetric "± n", relative "± n %",
 # or asymmetric "+a/-b" (canonical-model.md tolerance types).
 _TOL = (
@@ -99,11 +98,20 @@ def _is_limit_cell(cell_text: str, header_path: list[str] | None) -> bool:
     return any(_LIMIT_KEYWORD.search(h) for h in (header_path or []))
 # phrase comparators in a window before the value (per language, lowercased)
 _PHRASE_COMPARATOR = [
-    (re.compile(r"(?:at least|mindestens|au moins|minimum|not less than)\s*$", re.I), "gte"),
-    (re.compile(r"(?:at most|maximum|up to|not exceed(?:ing)?|no more than|"
-                r"höchstens|maximal|au plus|ne (?:doit|doivent) pas dépasser)\s*$", re.I), "lte"),
+    (re.compile(r"(?:at least|at\s+minimum|more than|greater than|mindestens|au moins|"
+                r"minimum|not less than|mehr als|größer als)\s*$", re.I), "gte"),
+    (re.compile(r"(?:at most|up to|maximum|not exceed(?:ing)?|no more than|less than|"
+                r"höchstens|maximal|au plus|ne (?:doit|doivent) pas dépasser|"
+                r"weniger als|kleiner als)\s*$", re.I), "lte"),
     (re.compile(r"(?:exactly|equal to|genau|exactement)\s*$", re.I), "eq"),
 ]
+
+# German compound nouns expressing bounds: searched anywhere in the text, not just
+# in a phrase window before the value. Mirrors how _LIMIT_KEYWORD works for table
+# headers rather than extending exact-phrase lists indefinitely.
+_GERMAN_BOUND_NOUNS = re.compile(
+    r"(?:mindest|höchst|minimal|maximal)(?:abstand|wert|höhe|breite|länge|tiefe|kraft|spannung|strom)",
+    re.IGNORECASE)
 
 
 # Locales where "," is the decimal separator and "." groups thousands
@@ -153,7 +161,8 @@ def _to_decimal(surface: str, lang: str | None = None) -> Decimal | None:
 
 def _comparator(text: str, match: re.Match) -> Comparator | None:
     """Determine the comparator from an explicit symbol, else a phrase in the
-    ~24 chars before the value. None when neither is present -- never default to
+    ~24 chars before the value, or a German compound-noun bound indicator
+    anywhere in the text. None when neither is present -- never default to
     eq (the gate quarantines a comparator-less parameter)."""
     sym = match.group("sym")
     if sym:
@@ -162,6 +171,13 @@ def _comparator(text: str, match: re.Match) -> Comparator | None:
     for pat, comp in _PHRASE_COMPARATOR:
         if pat.search(window):
             return comp  # type: ignore[return-value]
+    # German compound nouns like "Mindestabstand" (minimum distance) appear
+    # anywhere in the text, not just before the value.
+    if _GERMAN_BOUND_NOUNS.search(text[:match.end() + 50]):
+        if re.search(r"(?:mindest|minimal)", text, re.I):
+            return "gte"
+        elif re.search(r"(?:höchst|maximal)", text, re.I):
+            return "lte"
     return None
 
 
@@ -181,11 +197,30 @@ def _build_tolerance(m: re.Match, unit: str | None, lang: str | None) -> Toleran
     return None
 
 
+def _has_limit_keyword_near(text: str, match: re.Match) -> bool:
+    """Whether a limit keyword appears immediately before a value in the same
+    clause. Catches 'limit 10 V/m', 'maximum 10 V/m', 'Grenzwert 10 m/s²'.
+    Respects sentence boundaries: doesn't look past periods to avoid pulling in
+    keywords from earlier sentences."""
+    value_start = match.start("value")
+    # Look back up to 30 chars, but stop at a sentence boundary (period)
+    start_candidate = max(0, value_start - 30)
+    # Find the last period within this range
+    last_period = text.rfind(".", start_candidate, value_start)
+    # Start from after the period if one exists, otherwise from the candidate
+    start = last_period + 1 if last_period >= start_candidate else start_candidate
+    window = text[start:value_start]
+    return bool(_LIMIT_KEYWORD.search(window))
+
+
 def parse_parameters(text: str, lang: str | None = None,
                      source_object_id: str | None = None) -> list[Parameter]:
     """Every explicit value+unit limit in a prose string, as Parameters. The
     condition (frequency band) is shared across the string's parameters -- a
-    clause states one band and then its limits."""
+    clause states one band and then its limits. A value+unit is emitted as a
+    Parameter if it has (1) a comparator (symbol or phrase), OR (2) a limit
+    keyword in the immediate text context. Conservative: otherwise, an
+    incidental number stays as plain text, not manufactured into a limit."""
     # PDF hyphenation-break soft hyphens (U+00AD): between two digits, they stood
     # in for a literal range separator ("3\xad100 Hz" meant "3-100 Hz") -- restore
     # it as a real hyphen so _BAND/_PARAM's range groups see it. Elsewhere, drop it
@@ -234,11 +269,17 @@ def parse_parameters(text: str, lang: str | None = None,
                 comparator="range", range=(value, hi), tolerance=tol,
                 condition=condition, source_object_id=source_object_id))
             continue
+        # single-value parameter: emit if it has a comparator (symbol/phrase) OR
+        # a limit keyword in the surrounding text. Conservative: otherwise don't
+        # manufacture a limit from a descriptive number.
+        comparator = _comparator(text, m)
+        if comparator is None and not _has_limit_keyword_near(text, m):
+            continue
         params.append(Parameter(
             name=(_QUANTITY_KIND.get(unit or "", "value")),
             quantity_kind=_QUANTITY_KIND.get(unit or ""),
             value=value, unit=unit, raw_unit=m.group("unit"),
-            comparator=_comparator(text, m), tolerance=tol,
+            comparator=comparator, tolerance=tol,
             condition=condition, source_object_id=source_object_id))
     return params
 
